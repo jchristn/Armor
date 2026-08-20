@@ -1,10 +1,11 @@
 namespace Armor.Agent
 {
     using System;
+    using System.IO;
+    using System.Reflection;
     using Avalonia;
     using Avalonia.Controls;
     using Avalonia.Controls.ApplicationLifetimes;
-    using Avalonia.Platform;
     using Avalonia.Themes.Fluent;
     using Avalonia.Threading;
 
@@ -74,7 +75,13 @@ namespace Armor.Agent
         {
             try
             {
-                return new WindowIcon(AssetLoader.Open(new Uri("avares://Armor.Agent/Assets/logo.ico")));
+                Stream? stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Armor.Agent.logo.ico");
+                if (stream == null)
+                    return null;
+                using (stream)
+                {
+                    return new WindowIcon(stream);
+                }
             }
             catch (Exception)
             {

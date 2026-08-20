@@ -5,6 +5,14 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <ApplicationIcon>Assets\logo.ico</ApplicationIcon>
+    <!--
+      We author no XAML (the Avalonia app is entirely code), so disable the Avalonia XAML
+      compilation task. It otherwise runs for AvaloniaResource items and races on the
+      intermediate assembly when the net8.0 and net10.0 targets build in parallel
+      (IOException: "the file ... is being used by another process"). The tray icon is
+      embedded as a plain resource and loaded from a manifest stream instead.
+    -->
+    <EnableAvaloniaXamlCompilation>false</EnableAvaloniaXamlCompilation>
     <Description>Armor agent: the always-on background process that owns the system-tray icon and runs scheduled backups.</Description>
   </PropertyGroup>
 
@@ -15,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AvaloniaResource Include="Assets\**" />
+    <EmbeddedResource Include="Assets\logo.ico" LogicalName="Armor.Agent.logo.ico" />
   </ItemGroup>
 
   <ItemGroup>
