@@ -30,7 +30,7 @@ namespace Armor.Tui
         /// <param name="hint">An optional dimmed footer hint; empty to omit.</param>
         /// <param name="centered">When true, each content line and the hint are horizontally centered.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="lines"/> is null.</exception>
-        public ArmorSplashModal(string title, IReadOnlyList<string> lines, string hint = "press any key to start", bool centered = true)
+        public ArmorSplashModal(string title, IReadOnlyList<string> lines, string hint = "Press any key to start", bool centered = true)
         {
             _Title = title ?? string.Empty;
             _Lines = lines ?? throw new ArgumentNullException(nameof(lines));

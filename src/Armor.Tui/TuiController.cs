@@ -22,6 +22,7 @@ namespace Armor.Tui
     public sealed class TuiController
     {
         private readonly ArmorContext _Context;
+        private readonly bool _ShowSplash;
         private TuiApplication? _App;
         private Pane? _Main;
         private Pane? _Status;
@@ -30,10 +31,12 @@ namespace Armor.Tui
         /// Initializes a new instance of the <see cref="TuiController"/> class.
         /// </summary>
         /// <param name="context">The runtime context. Cannot be null.</param>
+        /// <param name="showSplash">When true, the startup splash is shown before the menu. Default is true.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="context"/> is null.</exception>
-        public TuiController(ArmorContext context)
+        public TuiController(ArmorContext context, bool showSplash = true)
         {
             _Context = context ?? throw new ArgumentNullException(nameof(context));
+            _ShowSplash = showSplash;
         }
 
         /// <summary>
@@ -69,9 +72,15 @@ namespace Armor.Tui
         {
             try
             {
-                string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0";
-                ArmorSplashModal splash = new ArmorSplashModal("Armor", ArmorBanner.SplashLines(version));
-                await App().ShowAsync(splash).ConfigureAwait(false);
+                if (_ShowSplash)
+                {
+                    Version? assemblyVersion = Assembly.GetExecutingAssembly().GetName().Version;
+                    string version = assemblyVersion != null
+                        ? assemblyVersion.Major + "." + assemblyVersion.Minor + "." + assemblyVersion.Build
+                        : "0.1.0";
+                    ArmorSplashModal splash = new ArmorSplashModal("Armor", ArmorBanner.SplashLines(version));
+                    await App().ShowAsync(splash).ConfigureAwait(false);
+                }
 
                 Info("Configuration: " + _Context.Paths.RootDirectory);
                 Info("Choose an option from the menu. Press Ctrl+Q at any time to quit.");

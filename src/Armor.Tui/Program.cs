@@ -14,10 +14,14 @@ namespace Armor.Tui
         /// <summary>
         /// Program entry point.
         /// </summary>
-        /// <param name="args">Command-line arguments (unused).</param>
+        /// <param name="args">
+        /// Command-line arguments. Pass <c>--no-splash</c> to skip the startup splash screen.
+        /// </param>
         /// <returns>Zero on normal exit; non-zero if the context could not be initialized.</returns>
         public static async Task<int> Main(string[] args)
         {
+            bool showSplash = !HasFlag(args, "--no-splash");
+
             ArmorContext context;
             try
             {
@@ -31,7 +35,7 @@ namespace Armor.Tui
 
             try
             {
-                TuiController controller = new TuiController(context);
+                TuiController controller = new TuiController(context, showSplash);
                 await TuiApp.RunAsync(controller.Configure).ConfigureAwait(false);
                 return 0;
             }
@@ -39,6 +43,18 @@ namespace Armor.Tui
             {
                 context.Dispose();
             }
+        }
+
+        private static bool HasFlag(string[] args, string flag)
+        {
+            if (args == null)
+                return false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (String.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
     }
 }
