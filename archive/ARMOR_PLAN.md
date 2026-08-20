@@ -323,7 +323,7 @@ Each phase should build clean (zero warnings, `TreatWarningsAsErrors`, docs gene
 - [x] Domain models (`Policy` + children, `Schedule`, `StorageTarget`, `EncryptionKey`, `BackupJob`, `RestoreJob`, `ChunkIndexEntry`, `PolicyStateEntry`) and domain exceptions.
 - [x] Configuration suite (8 cases) + data-layer suite (11 cases), positive + negative — all green through the console runner. 24 cases total across Phases 0–1.
 
-> **Note:** `Microsoft.Data.Sqlite` transitively pulls a `SQLitePCLRaw` native library flagged by NuGet audit (NU1903). It is kept as a visible warning (not build-blocking) and tracked for the Phase 8 hardening pass to pin a patched release.
+> **Note:** `Microsoft.Data.Sqlite` transitively pulled a `SQLitePCLRaw` native library flagged by NuGet audit (NU1903). Resolved in Phase 8 by pinning `SQLitePCLRaw.bundle_e_sqlite3` 2.1.13; the audit is now fully enforced (no suppression).
 
 ### Phase 2 — Crypto and keystore ✅
 - [x] `AesGcmCipher` (versioned nonce/tag/ciphertext frame, AAD-bound); `Pbkdf2KeyDeriver` (PBKDF2-HMAC-SHA256, BCL); `KeyMaterial` (data-key + key-file KEK derivation).
@@ -367,9 +367,9 @@ Each phase should build clean (zero warnings, `TreatWarningsAsErrors`, docs gene
 ### Phase 8 — Hardening and docs ✅
 - [x] Coverage pass: added a `Coverage` suite closing deterministic gaps (enumerations, updates, disposal, change detection, path resolution, exceptions, codecs, scheduler branches). **87.8% line / 67.3% branch on `Armor.Core`**; remaining gap is live-provider arms, UI shells, and error/cancellation branches (see the coverage stance in [§18](#18-testing-strategy-and-coverage)).
 - [x] README enriched (logo + Flaticon attribution, getting-started walkthrough, provider-setup table, disaster-recovery paths); CHANGELOG rewritten for the 0.1.0 scope.
-- [x] Whole solution builds clean on **net8.0 and net10.0** with zero compiler warnings (only the transitive NU1903 audit advisory remains, non-blocking).
+- [x] Whole solution builds clean on **net8.0 and net10.0** with **zero warnings and zero errors**, NuGet audit fully enforced. Resolved two transitive advisories: pinned `SQLitePCLRaw.bundle_e_sqlite3` 2.1.13 (via Microsoft.Data.Sqlite) and bumped Avalonia to 11.3.20 (which references the patched `Tmds.DBus.Protocol` 0.21.3).
 - [x] CI workflow (`.github/workflows/tests.yml`): build + console runner + xUnit + NUnit on Ubuntu/Windows/macOS with .NET 8 and 10.
-- [ ] Follow-up (not blocking): pin a patched `SQLitePCLRaw` when one ships (NU1903); fault-injection tests for error/cancellation branches; Argon2id option; distribution signing/notarization.
+- [ ] Follow-up (not blocking): fault-injection tests for error/cancellation branches; Argon2id option; distribution signing/notarization.
 
 ---
 

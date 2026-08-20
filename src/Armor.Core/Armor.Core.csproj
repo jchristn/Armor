@@ -3,14 +3,6 @@
   <PropertyGroup>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!--
-      NuGet audit advisories (NU19xx) are kept visible as warnings but do not fail the build:
-      they track transitive-dependency advisories (currently SQLitePCLRaw's bundled SQLite native
-      library via Microsoft.Data.Sqlite) that we cannot resolve without a patched upstream release.
-      Compiler warnings remain errors. Revisit in the Phase 8 hardening pass to pin a patched
-      SQLitePCLRaw once one ships on a stable Microsoft.Data.Sqlite.
-    -->
-    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
     <Description>Armor engine: configuration, SQLite data layer, content-addressed chunk store, AES-256-GCM cryptography, storage-target abstraction over Blobject, and the backup/restore engines.</Description>
   </PropertyGroup>
 
@@ -23,6 +15,13 @@
     <PackageReference Include="Blobject.NFS" Version="5.0.20" />
     <PackageReference Include="Blobject.GoogleCloud" Version="5.0.20" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.11" />
+    <!--
+      Pin the SQLitePCLRaw family to a patched build. Microsoft.Data.Sqlite 9.0.11 pulls
+      SQLitePCLRaw 2.1.10, whose bundled SQLite native library is flagged by NuGet audit
+      (NU1903 / GHSA-2m69-gcr7-jv3q). This direct reference overrides the transitive
+      version across the dependency graph with a fixed release.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <PackageReference Include="PrettyId" Version="2.0.1" />
   </ItemGroup>
 
