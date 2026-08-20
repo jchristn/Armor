@@ -3,6 +3,7 @@ namespace Armor.Tui
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Reflection;
     using System.Threading.Tasks;
     using Armor.Core.Enums;
     using Armor.Core.Models;
@@ -11,13 +12,12 @@ namespace Armor.Tui
     using TUIKit.Content;
     using TUIKit.Hosting;
     using TUIKit.Layout;
-    using TUIKit.Widgets;
 
     /// <summary>
-    /// Wires the Armor TUI: a dock-shell layout with a menu bar, an output pane, and a status line.
-    /// Menu actions drive the service layer to manage policies, schedules, storage targets, encryption
-    /// keys, backups, and restores. Long operations run off the render loop; prompts and selections use
-    /// the built-in modal helpers.
+    /// Drives the Armor TUI. After a startup splash, it runs a modal menu loop: a main menu opens
+    /// sub-menus and actions built from the built-in select and prompt dialogs, and an output pane keeps
+    /// a running log behind the dialogs. Every operation — managing policies, targets, keys, and
+    /// schedules, running backups, and restoring — is reachable from the menus.
     /// </summary>
     public sealed class TuiController
     {
@@ -37,7 +37,7 @@ namespace Armor.Tui
         }
 
         /// <summary>
-        /// Configure the application: build the layout, panes, and menu bar.
+        /// Configure the application: build the layout and panes, then start the splash and menu loop.
         /// </summary>
         /// <param name="app">The TUI application to configure. Cannot be null.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="app"/> is null.</exception>
@@ -49,61 +49,138 @@ namespace Armor.Tui
             _App = app;
 
             app.Layout = Layout.Create()
-                .DockTop("menubar", 1)
+                .DockTop("title", 1)
                 .DockBottom("status", 1)
                 .Fill("main")
                 .Build();
 
+            Pane title = app.AddPane("title");
+            title.WriteLine(" Armor — data protection for the paranoid");
             _Main = app.AddPane("main");
             _Status = app.AddPane("status");
 
-            MenuBar menu = new MenuBar();
-            menu.AddMenu("Policies")
-                .Add("List", () => Launch(ListPoliciesAsync))
-                .Add("Create", () => Launch(CreatePolicyAsync))
-                .Add("Run backup", () => Launch(RunBackupAsync));
-            menu.AddMenu("Jobs")
-                .Add("List", () => Launch(ListJobsAsync));
-            menu.AddMenu("Schedules")
-                .Add("List", () => Launch(ListSchedulesAsync))
-                .Add("Create", () => Launch(CreateScheduleAsync));
-            menu.AddMenu("Targets")
-                .Add("List", () => Launch(ListTargetsAsync))
-                .Add("Create disk target", () => Launch(CreateDiskTargetAsync))
-                .Add("Validate", () => Launch(ValidateTargetAsync));
-            menu.AddMenu("Keys")
-                .Add("List", () => Launch(ListKeysAsync))
-                .Add("Create", () => Launch(CreateKeyAsync));
-            menu.AddMenu("Restore")
-                .Add("Restore a point-in-time", () => Launch(RestoreAsync));
-            menu.AddMenu("Maintenance")
-                .Add("Export self-backup", () => Launch(ExportSelfBackupAsync));
-            menu.AddMenu("Help")
-                .Add("About", () => Launch(ShowAboutAsync))
-                .Add("Quit", app.Quit);
+            app.Bind("ctrl+q", app.Quit);
 
-            app.Bind("menubar", menu);
-
-            SetStatus("Ready");
-            Info("Armor — data protection for the paranoid.");
-            Info("Use the menu bar (Left/Right to move, Enter to open). Help → Quit to exit.");
+            SetStatus("Starting");
+            _ = StartAsync();
         }
 
-        private void Launch(Func<Task> handler)
-        {
-            _ = RunSafeAsync(handler);
-        }
-
-        private async Task RunSafeAsync(Func<Task> handler)
+        private async Task StartAsync()
         {
             try
             {
-                await handler().ConfigureAwait(false);
+                string version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0";
+                ArmorSplashModal splash = new ArmorSplashModal("Armor", ArmorBanner.SplashLines(version));
+                await App().ShowAsync(splash).ConfigureAwait(false);
+
+                Info("Configuration: " + _Context.Paths.RootDirectory);
+                Info("Choose an option from the menu. Press Ctrl+Q at any time to quit.");
+                await RunMenuLoopAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                Info("Error: " + ex.Message);
-                SetStatus("Error");
+                Info("Fatal: " + ex.Message);
+            }
+        }
+
+        private async Task RunMenuLoopAsync()
+        {
+            bool running = true;
+            while (running)
+            {
+                int choice = await App().SelectAsync(
+                    "Armor — Main Menu",
+                    "Policies",
+                    "Storage targets",
+                    "Encryption keys",
+                    "Run a backup",
+                    "Restore files",
+                    "Backup jobs",
+                    "Schedules",
+                    "Maintenance",
+                    "About",
+                    "Quit").ConfigureAwait(false);
+
+                try
+                {
+                    switch (choice)
+                    {
+                        case 0: await PoliciesMenuAsync().ConfigureAwait(false); break;
+                        case 1: await TargetsMenuAsync().ConfigureAwait(false); break;
+                        case 2: await KeysMenuAsync().ConfigureAwait(false); break;
+                        case 3: await RunBackupAsync().ConfigureAwait(false); break;
+                        case 4: await RestoreAsync().ConfigureAwait(false); break;
+                        case 5: await ListJobsAsync().ConfigureAwait(false); break;
+                        case 6: await SchedulesMenuAsync().ConfigureAwait(false); break;
+                        case 7: await MaintenanceMenuAsync().ConfigureAwait(false); break;
+                        case 8: await ShowAboutAsync().ConfigureAwait(false); break;
+                        case 9: running = false; break;
+                        default: break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Info("Error: " + ex.Message);
+                    SetStatus("Error");
+                }
+            }
+
+            App().Quit();
+        }
+
+        private async Task PoliciesMenuAsync()
+        {
+            while (true)
+            {
+                int choice = await App().SelectAsync("Policies", "List policies", "Create policy", "Run a backup", "Back").ConfigureAwait(false);
+                if (choice == 0) await ListPoliciesAsync().ConfigureAwait(false);
+                else if (choice == 1) await CreatePolicyAsync().ConfigureAwait(false);
+                else if (choice == 2) await RunBackupAsync().ConfigureAwait(false);
+                else return;
+            }
+        }
+
+        private async Task TargetsMenuAsync()
+        {
+            while (true)
+            {
+                int choice = await App().SelectAsync("Storage targets", "List targets", "Create disk target", "Validate a target", "Back").ConfigureAwait(false);
+                if (choice == 0) await ListTargetsAsync().ConfigureAwait(false);
+                else if (choice == 1) await CreateDiskTargetAsync().ConfigureAwait(false);
+                else if (choice == 2) await ValidateTargetAsync().ConfigureAwait(false);
+                else return;
+            }
+        }
+
+        private async Task KeysMenuAsync()
+        {
+            while (true)
+            {
+                int choice = await App().SelectAsync("Encryption keys", "List keys", "Create key", "Back").ConfigureAwait(false);
+                if (choice == 0) await ListKeysAsync().ConfigureAwait(false);
+                else if (choice == 1) await CreateKeyAsync().ConfigureAwait(false);
+                else return;
+            }
+        }
+
+        private async Task SchedulesMenuAsync()
+        {
+            while (true)
+            {
+                int choice = await App().SelectAsync("Schedules", "List schedules", "Create schedule", "Back").ConfigureAwait(false);
+                if (choice == 0) await ListSchedulesAsync().ConfigureAwait(false);
+                else if (choice == 1) await CreateScheduleAsync().ConfigureAwait(false);
+                else return;
+            }
+        }
+
+        private async Task MaintenanceMenuAsync()
+        {
+            while (true)
+            {
+                int choice = await App().SelectAsync("Maintenance", "Export self-backup", "Back").ConfigureAwait(false);
+                if (choice == 0) await ExportSelfBackupAsync().ConfigureAwait(false);
+                else return;
             }
         }
 
