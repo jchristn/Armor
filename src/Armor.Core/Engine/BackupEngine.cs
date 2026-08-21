@@ -149,6 +149,20 @@ namespace Armor.Core.Engine
                 byte[] manifestBytes = ManifestCodec.Encode(manifest, dataKey);
                 await repository.WriteObjectAsync(manifestKey, manifestBytes, token).ConfigureAwait(false);
 
+                // Write a small encrypted metadata sidecar so the catalog can be listed and described
+                // during recovery without decoding the full manifest.
+                BackupRunInfo runInfo = new BackupRunInfo();
+                runInfo.JobId = job.Id;
+                runInfo.PolicyId = policy.Id;
+                runInfo.PolicyName = policy.Name;
+                runInfo.BackupType = manifest.BackupType;
+                runInfo.PointInTimeUtc = manifest.PointInTimeUtc;
+                runInfo.FileCount = job.FileCount;
+                runInfo.TotalBytes = job.BytesTotal;
+                runInfo.BytesWritten = job.BytesWritten;
+                runInfo.ChunksWritten = job.ChunksWritten;
+                await repository.WriteObjectAsync(RepositoryKeys.InfoKey(policy.Id, job.Id), RunInfoCodec.Encode(runInfo, dataKey), token).ConfigureAwait(false);
+
                 job.ManifestKey = manifestKey;
                 job.Status = JobStatusEnum.Completed;
                 job.CompletedUtc = DateTime.UtcNow;

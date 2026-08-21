@@ -2,7 +2,6 @@ namespace Armor.Agent
 {
     using System;
     using System.Collections.Generic;
-    using System.IO;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Models;
@@ -111,16 +110,11 @@ namespace Armor.Agent
                 return cached;
 
             Armor.Core.Models.EncryptionKey? key = await context.Database.EncryptionKeys.ReadAsync(policy.EncryptionKeyId!, token).ConfigureAwait(false);
-            if (key == null || !key.UsesKeyFile)
-                return null;
-
-            string keyFilePath = Path.Combine(context.Paths.StateDirectory, "keys", key.Id + ".key");
-            if (!File.Exists(keyFilePath))
-                return null;
-
-            byte[] keyFileBytes = await File.ReadAllBytesAsync(keyFilePath, token).ConfigureAwait(false);
             EncryptionKeyService keyService = new EncryptionKeyService(context.Database);
-            byte[] dataKey = await keyService.UnlockWithKeyFileAsync(key.Id, keyFileBytes, token).ConfigureAwait(false);
+            if (key == null || !keyService.CanUnlockUnattended(key, context.Paths))
+                return null;
+
+            byte[] dataKey = await keyService.UnlockUnattendedAsync(key.Id, context.Paths, context.CredentialProtector, token).ConfigureAwait(false);
             _KeyCache[key.Id] = dataKey;
             return dataKey;
         }

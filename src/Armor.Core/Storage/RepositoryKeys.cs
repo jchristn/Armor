@@ -64,5 +64,31 @@ namespace Armor.Core.Storage
                 throw new ArgumentNullException(nameof(jobId));
             return ManifestPrefix(policyId) + jobId + ".manifest";
         }
+
+        /// <summary>
+        /// File extension of the manifest object.
+        /// </summary>
+        public const string ManifestExtension = ".manifest";
+
+        /// <summary>
+        /// File extension of the per-run info sidecar object.
+        /// </summary>
+        public const string InfoExtension = ".info";
+
+        /// <summary>
+        /// Build the per-run info-sidecar key for a specific run. The sidecar carries a small encrypted
+        /// summary of the run (timestamp, type, file count, sizes) so the catalog can be listed without
+        /// decoding the full manifest.
+        /// </summary>
+        /// <param name="policyId">Policy identifier. Cannot be null or whitespace.</param>
+        /// <param name="jobId">Backup job identifier. Cannot be null or whitespace.</param>
+        /// <returns>The info object key.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when an argument is null or whitespace.</exception>
+        public static string InfoKey(string policyId, string jobId)
+        {
+            if (String.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentNullException(nameof(jobId));
+            return ManifestPrefix(policyId) + jobId + InfoExtension;
+        }
     }
 }

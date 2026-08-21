@@ -65,6 +65,44 @@ namespace Armor.Core.Configuration
         }
 
         /// <summary>
+        /// Absolute path to the directory that holds machine-local key files for encryption keys
+        /// provisioned for unattended (set-and-forget) unlock, within the state directory.
+        /// </summary>
+        public string KeysDirectory
+        {
+            get { return Path.Combine(StateDirectory, "keys"); }
+        }
+
+        /// <summary>
+        /// Absolute path to the cached password for the supplied encryption key (encrypted at rest with
+        /// the machine-local credential protector). This is the shared location the TUI writes and the
+        /// agent reads, so unattended unlock stays in lockstep.
+        /// </summary>
+        /// <param name="keyId">The encryption key identifier. Cannot be null or whitespace.</param>
+        /// <returns>The absolute password-file path.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="keyId"/> is null or whitespace.</exception>
+        public string PasswordFilePath(string keyId)
+        {
+            if (String.IsNullOrWhiteSpace(keyId))
+                throw new ArgumentNullException(nameof(keyId));
+            return Path.Combine(KeysDirectory, keyId + ".pwd");
+        }
+
+        /// <summary>
+        /// Absolute path to the stored key file for an encryption key created under the older key-file
+        /// model. Retained so such keys can still be unlocked; new keys are password-protected.
+        /// </summary>
+        /// <param name="keyId">The encryption key identifier. Cannot be null or whitespace.</param>
+        /// <returns>The absolute key-file path.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="keyId"/> is null or whitespace.</exception>
+        public string KeyFilePath(string keyId)
+        {
+            if (String.IsNullOrWhiteSpace(keyId))
+                throw new ArgumentNullException(nameof(keyId));
+            return Path.Combine(KeysDirectory, keyId + ".key");
+        }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="ArmorPaths"/> class.
         /// </summary>
         /// <param name="rootDirectory">
