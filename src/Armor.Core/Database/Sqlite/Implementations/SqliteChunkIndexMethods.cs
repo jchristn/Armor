@@ -88,6 +88,40 @@ namespace Armor.Core.Database.Sqlite.Implementations
         }
 
         /// <inheritdoc/>
+        public async Task ReferenceBatchAsync(IReadOnlyList<ChunkIndexEntry> entries, CancellationToken token = default)
+        {
+            if (entries == null)
+                throw new ArgumentNullException(nameof(entries));
+            if (entries.Count == 0)
+                return;
+
+            List<string> statements = new List<string>(entries.Count);
+            foreach (ChunkIndexEntry entry in entries)
+            {
+                if (entry == null)
+                    throw new ArgumentException("Batch contains a null entry.", nameof(entries));
+                if (String.IsNullOrWhiteSpace(entry.StorageTargetId))
+                    throw new ArgumentException("StorageTargetId is required.", nameof(entries));
+                if (String.IsNullOrWhiteSpace(entry.Hash))
+                    throw new ArgumentException("Hash is required.", nameof(entries));
+
+                string id = String.IsNullOrWhiteSpace(entry.Id) ? IdGenerator.GenerateChunkId() : entry.Id;
+                statements.Add(
+                    "INSERT INTO chunk_index (id, storage_target_id, hash, stored_size_bytes, plaintext_size_bytes, reference_count, created_utc) VALUES (" +
+                    Sanitizer.Literal(id) + ", " +
+                    Sanitizer.Literal(entry.StorageTargetId) + ", " +
+                    Sanitizer.Literal(entry.Hash) + ", " +
+                    Sanitizer.Int(entry.StoredSizeBytes) + ", " +
+                    Sanitizer.Int(entry.PlaintextSizeBytes) + ", " +
+                    "1, " +
+                    Sanitizer.Timestamp(entry.CreatedUtc) + ") " +
+                    "ON CONFLICT(storage_target_id, hash) DO UPDATE SET reference_count = reference_count + 1;");
+            }
+
+            await _Driver.ExecuteQueriesAsync(statements, true, token).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc/>
         public async Task<long> IncrementReferenceAsync(string storageTargetId, string hash, CancellationToken token = default)
         {
             if (String.IsNullOrWhiteSpace(storageTargetId))

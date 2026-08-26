@@ -3,6 +3,7 @@ namespace Armor.Tui
     using System;
     using System.Collections.Generic;
     using TUIKit.Ascii;
+    using TUIKit.Ascii.Fonts;
 
     /// <summary>
     /// The Armor ASCII-art wordmark and the startup splash text. The wordmark is rendered with TUIKit's
@@ -29,17 +30,47 @@ namespace Armor.Tui
             return lines;
         }
 
-        private static IReadOnlyList<string> RenderWordmark()
+        /// <summary>
+        /// Render the "Armor" wordmark with the TUIKit Small font, padded so every row is the same
+        /// width (so it centers cleanly and lays out in a fixed-width column). Falls back to plain text
+        /// if the font engine is unavailable.
+        /// </summary>
+        /// <returns>The wordmark rows.</returns>
+        public static string[] WordmarkLines()
         {
+            List<string> rows = new List<string>();
             try
             {
-                IAsciiFont font = AsciiFontLibrary.Default.Get("Standard");
-                return AsciiArt.Render("Armor", font);
+                foreach (string row in AsciiArt.Render("armor", new SmallAsciiFont()))
+                    rows.Add(row);
             }
             catch (Exception)
             {
-                return new List<string> { "A R M O R" };
+                rows.Clear();
+                rows.Add("a r m o r");
             }
+
+            // The FIGlet font can include blank rows above and below the glyphs; drop them so the
+            // wordmark has no leading blank line and occupies exactly its glyph height.
+            while (rows.Count > 0 && rows[0].Trim().Length == 0)
+                rows.RemoveAt(0);
+            while (rows.Count > 0 && rows[rows.Count - 1].Trim().Length == 0)
+                rows.RemoveAt(rows.Count - 1);
+            if (rows.Count == 0)
+                rows.Add("a r m o r");
+
+            int width = 0;
+            foreach (string row in rows)
+                width = Math.Max(width, row.Length);
+            for (int i = 0; i < rows.Count; i++)
+                rows[i] = rows[i].PadRight(width);
+
+            return rows.ToArray();
+        }
+
+        private static IReadOnlyList<string> RenderWordmark()
+        {
+            return WordmarkLines();
         }
     }
 }

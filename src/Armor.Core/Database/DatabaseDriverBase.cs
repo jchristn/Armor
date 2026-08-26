@@ -60,6 +60,12 @@ namespace Armor.Core.Database
         public IPolicyStateMethods PolicyState { get; protected set; } = null!;
 
         /// <summary>
+        /// Per-job work-list (<c>job_files</c>) data-access methods, used to stream a backup's manifest to
+        /// disk and to resume a failed run.
+        /// </summary>
+        public IJobFileMethods JobFiles { get; protected set; } = null!;
+
+        /// <summary>
         /// Open the database, apply pending migrations, and prepare the driver for use. Idempotent.
         /// </summary>
         /// <param name="token">Cancellation token.</param>

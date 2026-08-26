@@ -17,6 +17,14 @@ namespace Armor.Core.Database
         public DatabaseTypeEnum Type { get; set; } = DatabaseTypeEnum.Sqlite;
 
         /// <summary>
+        /// Optional sink for human-readable progress messages emitted during potentially slow one-time
+        /// startup maintenance (applying a migration, reclaiming space with VACUUM). A startup path can
+        /// point this at the console so the user sees the database is working rather than hung. Null by
+        /// default, in which case maintenance runs silently.
+        /// </summary>
+        public Action<string>? MaintenanceReporter { get; set; }
+
+        /// <summary>
         /// Path to the SQLite database file. Cannot be null or whitespace.
         /// </summary>
         /// <exception cref="ArgumentNullException">Thrown when set to null or whitespace.</exception>

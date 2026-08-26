@@ -49,6 +49,7 @@ namespace Armor.Core.Database.Sqlite
             RestoreJobs = new SqliteRestoreJobMethods(this);
             ChunkIndex = new SqliteChunkIndexMethods(this);
             PolicyState = new SqlitePolicyStateMethods(this);
+            JobFiles = new SqliteJobFileMethods(this);
         }
 
         /// <inheritdoc/>
@@ -78,7 +79,19 @@ namespace Armor.Core.Database.Sqlite
                 await ExecuteNoLockAsync("PRAGMA busy_timeout=" + _Settings.BusyTimeoutMilliseconds + ";", null, token).ConfigureAwait(false);
                 await ExecuteNoLockAsync("PRAGMA foreign_keys=ON;", null, token).ConfigureAwait(false);
 
+                // Throughput tuning. A backup writes millions of small chunk-index rows; with the default
+                // synchronous=FULL every autocommit fsyncs, which is the dominant cost on a fast disk. NORMAL
+                // still guarantees no corruption in WAL mode — a crash can lose only the last transaction or
+                // two, which a resumed backup simply re-does (chunk blobs are written before their index rows,
+                // so nothing referenced is ever lost). A large page cache and in-memory temporaries keep the
+                // hot path off the disk; a higher WAL autocheckpoint lets writes batch before a checkpoint.
+                await ExecuteNoLockAsync("PRAGMA synchronous=NORMAL;", null, token).ConfigureAwait(false);
+                await ExecuteNoLockAsync("PRAGMA temp_store=MEMORY;", null, token).ConfigureAwait(false);
+                await ExecuteNoLockAsync("PRAGMA cache_size=-65536;", null, token).ConfigureAwait(false);
+                await ExecuteNoLockAsync("PRAGMA wal_autocheckpoint=4000;", null, token).ConfigureAwait(false);
+
                 await ApplyMigrationsAsync(token).ConfigureAwait(false);
+                await ReclaimIfBloatedAsync(token).ConfigureAwait(false);
 
                 _Initialized = true;
             }
@@ -274,30 +287,177 @@ namespace Armor.Core.Database.Sqlite
 
                 token.ThrowIfCancellationRequested();
 
-                using (SqliteTransaction transaction = (SqliteTransaction)await _Connection!.BeginTransactionAsync(token).ConfigureAwait(false))
+                string label = "Applying database migration " + migration.Version + " (" + migration.Description + ")";
+                Report(label + "…");
+
+                await WithHeartbeatAsync(label, async () =>
                 {
+                    using (SqliteTransaction transaction = (SqliteTransaction)await _Connection!.BeginTransactionAsync(token).ConfigureAwait(false))
+                    {
+                        try
+                        {
+                            foreach (string statement in migration.Statements)
+                                await ExecuteNoLockAsync(statement, transaction, token).ConfigureAwait(false);
+
+                            await ExecuteNoLockAsync(
+                                "INSERT INTO schema_migrations (version, description, applied_utc) VALUES (" +
+                                Sanitizer.Int(migration.Version) + ", " +
+                                Sanitizer.Literal(migration.Description) + ", " +
+                                Sanitizer.Timestamp(DateTime.UtcNow) + ");",
+                                transaction,
+                                token).ConfigureAwait(false);
+
+                            await transaction.CommitAsync(token).ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                            throw;
+                        }
+                    }
+                    return true;
+                }).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Reclaim free pages when the database file has become badly over-allocated. Dropping or rebuilding
+        /// a large table (for example the multi-gigabyte <c>job_files</c> work list left by an interrupted
+        /// run, or the compaction migration that replaces it) moves its pages onto the freelist but does not
+        /// shrink the file. A full <c>VACUUM</c> rewrites the database and returns that space to the OS. It
+        /// cannot run inside a transaction, so it executes here on its own after the migrations commit. The
+        /// work is gated on the freelist size so a healthy database is never rewritten on startup.
+        /// </summary>
+        private async Task ReclaimIfBloatedAsync(CancellationToken token)
+        {
+            DataTable freeTable = await ExecuteNoLockAsync("PRAGMA freelist_count;", null, token).ConfigureAwait(false);
+            DataTable pageSizeTable = await ExecuteNoLockAsync("PRAGMA page_size;", null, token).ConfigureAwait(false);
+            DataTable pageCountTable = await ExecuteNoLockAsync("PRAGMA page_count;", null, token).ConfigureAwait(false);
+            if (freeTable.Rows.Count == 0 || pageSizeTable.Rows.Count == 0 || pageCountTable.Rows.Count == 0)
+                return;
+
+            long freePages = Converters.GetLong(freeTable.Rows[0], "freelist_count");
+            long pageSize = Converters.GetLong(pageSizeTable.Rows[0], "page_size");
+            long pageCount = Converters.GetLong(pageCountTable.Rows[0], "page_count");
+            long freeBytes = freePages * pageSize;
+            long liveBytes = Math.Max(0, (pageCount - freePages) * pageSize);
+
+            // 256 MiB of dead space is the threshold: below it a VACUUM is not worth the whole-file rewrite;
+            // above it the file is carrying a dropped work list (which can be many gigabytes) that should go
+            // back to the OS.
+            const long reclaimThresholdBytes = 256L * 1024 * 1024;
+            if (freeBytes < reclaimThresholdBytes)
+                return;
+
+            // VACUUM builds a fresh copy of the live data before swapping it in, so it needs free disk space
+            // roughly equal to the live (not the free) bytes, plus a margin. On a nearly-full disk a VACUUM
+            // could fail partway; skip it and leave the free pages to be reused in place rather than risk
+            // filling the volume. The file stays large but the database is fully usable.
+            const long marginBytes = 512L * 1024 * 1024;
+            long requiredBytes = liveBytes + marginBytes;
+            long availableBytes = TryGetAvailableFreeBytes(_Settings.Filename);
+            if (availableBytes >= 0 && availableBytes < requiredBytes)
+            {
+                string skip = "Skipping database compaction: reclaiming " + FormatMb(freeBytes) +
+                    " needs about " + FormatMb(requiredBytes) + " free on the drive but only " +
+                    FormatMb(availableBytes) + " is available. Free up space and restart to reclaim it.";
+                Report(skip);
+                Diagnostics.ArmorLog.Warn(skip);
+                return;
+            }
+
+            string start = "Reclaiming " + FormatMb(freeBytes) + " of free database space (VACUUM); this can take a while on a large database.";
+            Report(start);
+            Diagnostics.ArmorLog.Info(start);
+            await WithHeartbeatAsync("Reclaiming database space", () => ExecuteNoLockAsync("VACUUM;", null, token)).ConfigureAwait(false);
+            Report("Database compaction complete.");
+            Diagnostics.ArmorLog.Info("Database VACUUM complete.");
+        }
+
+        private void Report(string message)
+        {
+            Action<string>? reporter = _Settings.MaintenanceReporter;
+            if (reporter != null)
+            {
+                try
+                {
+                    reporter(message);
+                }
+                catch
+                {
+                    // A reporter is best-effort console feedback; never let it break startup.
+                }
+            }
+        }
+
+        /// <summary>
+        /// Run a potentially slow operation while emitting a periodic "still working" heartbeat through the
+        /// maintenance reporter, so a multi-minute migration or VACUUM does not look like a hang. The first
+        /// tick only fires after a few seconds, so quick work stays silent.
+        /// </summary>
+        private async Task<T> WithHeartbeatAsync<T>(string label, Func<Task<T>> work)
+        {
+            using (CancellationTokenSource beat = new CancellationTokenSource())
+            {
+                Task ticker = HeartbeatAsync(label, beat.Token);
+                try
+                {
+                    return await work().ConfigureAwait(false);
+                }
+                finally
+                {
+                    beat.Cancel();
                     try
                     {
-                        foreach (string statement in migration.Statements)
-                            await ExecuteNoLockAsync(statement, transaction, token).ConfigureAwait(false);
-
-                        await ExecuteNoLockAsync(
-                            "INSERT INTO schema_migrations (version, description, applied_utc) VALUES (" +
-                            Sanitizer.Int(migration.Version) + ", " +
-                            Sanitizer.Literal(migration.Description) + ", " +
-                            Sanitizer.Timestamp(DateTime.UtcNow) + ");",
-                            transaction,
-                            token).ConfigureAwait(false);
-
-                        await transaction.CommitAsync(token).ConfigureAwait(false);
+                        await ticker.ConfigureAwait(false);
                     }
-                    catch
+                    catch (OperationCanceledException)
                     {
-                        await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                        throw;
                     }
                 }
             }
+        }
+
+        private async Task HeartbeatAsync(string label, CancellationToken token)
+        {
+            int seconds = 0;
+            while (true)
+            {
+                try
+                {
+                    await Task.Delay(3000, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                seconds += 3;
+                Report(label + " — still working (" + seconds + "s elapsed)");
+            }
+        }
+
+        private static long TryGetAvailableFreeBytes(string path)
+        {
+            try
+            {
+                string full = Path.GetFullPath(path);
+                string? root = Path.GetPathRoot(full);
+                if (String.IsNullOrEmpty(root))
+                    return -1;
+                DriveInfo drive = new DriveInfo(root);
+                return drive.AvailableFreeSpace;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private static string FormatMb(long bytes)
+        {
+            if (bytes >= 1024L * 1024 * 1024)
+                return (bytes / (1024.0 * 1024 * 1024)).ToString("0.0") + " GB";
+            return (bytes / (1024 * 1024)) + " MB";
         }
 
         private void ThrowIfDisposed()

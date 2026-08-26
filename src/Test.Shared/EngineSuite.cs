@@ -245,6 +245,29 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("BareNameExcludePrunesDirectory", "A bare-name exclude prunes a matching directory", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            string source = Path.Combine(ws.RootDirectory, "source");
+                            WriteFile(source, "keep.txt", Content(70, 2000));
+                            // A ".git" directory full of files the walk must never descend into, plus a file
+                            // literally named ".git" elsewhere — a bare-name (Any) rule excludes both.
+                            WriteFile(source, ".git/HEAD", Content(71, 2000));
+                            WriteFile(source, ".git/objects/ab/cd", Content(72, 2000));
+                            WriteFile(source, "nested/.git/config", Content(73, 2000));
+                            WriteFile(source, "other/.git", Content(74, 2000));
+
+                            Policy policy = NewPolicy(source);
+                            policy.ExcludePatterns.Add(new ExcludePattern(".git", false, ExcludeTargetEnum.Any));
+
+                            BackupEngine backup = new BackupEngine(fx.Database);
+                            BackupJob job = await backup.RunAsync(policy, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
+                            Check.Equal(1L, job.FileCount, "only keep.txt survives; every .git file or folder is excluded");
+                        }
+                    }),
+
                     Case("SizeBoundsHonored", "Minimum and maximum size bounds filter files", async ct =>
                     {
                         using (TempWorkspace ws = new TempWorkspace())
@@ -281,6 +304,46 @@ namespace Test.Shared
                             string restore = Path.Combine(ws.RootDirectory, "restore");
                             await RestoreAllAsync(fx, job, restore, ct).ConfigureAwait(false);
                             AssertRestored(source, restore, new[] { "empty.txt", "nonempty.txt" });
+                        }
+                    }),
+
+                    Case("ParallelBackupDeduplicatesAndRestores", "Parallel workers dedupe shared chunks and restore intact", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            // Many files across a handful of distinct contents, each content repeated so the
+                            // same chunks are seen by several workers at once — this stresses the shared
+                            // present-set and single-writer-per-hash coordination. Restoring every file
+                            // byte-for-byte proves dedup, reference counting and per-file commits stayed
+                            // correct under concurrency.
+                            string source = Path.Combine(ws.RootDirectory, "source");
+                            const int groups = 20;
+                            const int copiesPerGroup = 8;
+                            List<string> relatives = new List<string>();
+                            for (int g = 0; g < groups; g++)
+                            {
+                                byte[] content = Content(1000 + g, 20000);
+                                for (int c = 0; c < copiesPerGroup; c++)
+                                {
+                                    string relative = "g" + g + "/copy" + c + ".bin";
+                                    WriteFile(source, relative, content);
+                                    relatives.Add(relative);
+                                }
+                            }
+                            int totalFiles = groups * copiesPerGroup;
+
+                            Policy policy = NewPolicy(source);
+                            BackupEngine backup = new BackupEngine(fx.Database);
+                            BackupJob job = await backup.RunAsync(policy, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct, progress: null, maxParallelism: 8).ConfigureAwait(false);
+
+                            Check.Equal((long)totalFiles, job.FileCount, "every file was backed up");
+                            Check.True(job.ChunksReused > 0, "duplicate files reused chunks across workers");
+                            Check.True(job.ChunksWritten > 0, "unique chunks were written");
+
+                            string restore = Path.Combine(ws.RootDirectory, "restore");
+                            await RestoreAllAsync(fx, job, restore, ct).ConfigureAwait(false);
+                            AssertRestored(source, restore, relatives.ToArray());
                         }
                     })
                 });

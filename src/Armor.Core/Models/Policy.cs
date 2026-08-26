@@ -19,6 +19,24 @@ namespace Armor.Core.Models
         private long _MinFileSizeBytes = 0;
         private long _MaxFileSizeBytes = 0;
         private int _RetentionDays = 30;
+        private int _MaxParallelism = DefaultParallelism;
+
+        /// <summary>
+        /// Smallest allowed value for <see cref="MaxParallelism"/> (fully serial).
+        /// </summary>
+        public const int MinParallelism = 1;
+
+        /// <summary>
+        /// Largest allowed value for <see cref="MaxParallelism"/>. Beyond this, extra workers mostly
+        /// contend on the single database connection and the target disk rather than adding throughput.
+        /// </summary>
+        public const int MaxParallelismLimit = 32;
+
+        /// <summary>
+        /// Default number of files a run processes at once — a moderate value that speeds up the CPU-bound
+        /// hashing, compression and encryption without oversaturating one disk or the shared database.
+        /// </summary>
+        public const int DefaultParallelism = 4;
 
         /// <summary>
         /// Unique, K-sortable policy identifier prefixed with <see cref="Constants.PolicyIdPrefix"/>.
@@ -152,6 +170,24 @@ namespace Armor.Core.Models
             set
             {
                 _RetentionDays = Math.Clamp(value, 1, 3650);
+            }
+        }
+
+        /// <summary>
+        /// How many files a run of this policy processes at once. Higher values parallelize the CPU-bound
+        /// hashing, compression and encryption across cores; 1 is fully serial. Default is
+        /// <see cref="DefaultParallelism"/>. Clamped to the range <see cref="MinParallelism"/> to
+        /// <see cref="MaxParallelismLimit"/>.
+        /// </summary>
+        public int MaxParallelism
+        {
+            get
+            {
+                return _MaxParallelism;
+            }
+            set
+            {
+                _MaxParallelism = Math.Clamp(value, MinParallelism, MaxParallelismLimit);
             }
         }
 

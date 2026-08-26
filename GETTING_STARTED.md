@@ -7,7 +7,7 @@ folder, then restore it somewhere else and confirm the files came back intact.
 
 Armor keeps everything it needs under a single directory, `~/.armor`, created on first
 run: `armor.json` (configuration), `armor.db` (the SQLite state database), `logs/`, and
-`state/`. Nothing is written anywhere else unless you point a storage target at it.
+`state/`. Nothing is written anywhere else unless you point a backup target at it.
 
 ## What you need
 
@@ -57,8 +57,8 @@ folders and the tray's **Open** action won't be able to launch the console.
 
 ## Run the terminal console
 
-The TUI is where you do everything by hand — create keys, targets, and policies, and run
-backups and restores. Start it with:
+The TUI is where you do everything by hand — set up backup targets and encryption
+passwords, define policies, run backups, and restore. Start it with:
 
 ```bash
 dotnet run --project src/Armor.Tui -f net10.0
@@ -67,15 +67,29 @@ dotnet run --project src/Armor.Tui -f net10.0
 or, from a published copy, run `dist/Armor.Tui` (double-click `Armor.Tui.exe` on Windows,
 or run `./Armor.Tui` in a terminal).
 
-You'll land on a full-screen console with a menu bar across the top: **Policies, Jobs,
-Schedules, Targets, Keys, Restore, Maintenance, Help**. Move between menus with the
-**Left/Right** arrows, open a menu with **Down** or **Enter**, move the highlight with
-**Up/Down**, and choose an item with **Enter**. When Armor asks you a question it opens a
-small dialog: type your answer and press **Enter**, or press **Escape** to cancel. When
-it asks you to pick from a list, use **Up/Down** and **Enter**. To leave, open **Help →
-Quit**.
+You'll land on a full-screen **dashboard**: the Armor wordmark across the top, a nav
+sidebar on the left, the selected section as a table in the middle, and an activity log
+along the bottom (with a progress bar above it during a backup). The nav is ordered as a
+setup checklist:
 
-The first launch creates `~/.armor` and prints where your configuration lives.
+```
+1 Backup targets      – where backups are stored
+2 Passwords           – the encryption password(s) that protect your data
+3 Policies            – what to back up, where, and how
+4 Schedules           – when to run automatically
+Runs                  – upcoming scheduled runs and anything in progress
+Backup jobs           – every point-in-time you can restore
+Recover               – restore from a target using only its location + password
+```
+
+Move the highlight with **↑/↓**. **Tab** (or **Enter** on a nav item) jumps into the
+table; **Esc** returns to the nav. In a table, **Enter** runs that section's main action
+(back up, validate, restore, enable/disable), **c** creates, **d** deletes, **r** shows a
+policy's restore points, **F5** refreshes, and **F1** shows all shortcuts. When Armor asks
+a question it opens a small dialog — type and press **Enter**, or **Escape** to cancel.
+Press **Ctrl+Q** to quit.
+
+The first launch creates `~/.armor` and logs where your configuration lives.
 
 ## A basic backup
 
@@ -88,31 +102,33 @@ echo "the only backup that matters is the one you can restore" > ~/armor-demo/so
 cp ~/armor-demo/source/notes.txt ~/armor-demo/source/notes-copy.txt
 ```
 
-Now, in the TUI, work top to bottom:
+Now, in the TUI, follow the numbered nav sections top to bottom:
 
-1. **Keys → Create.** Give the key a name (for example, `demo-key`) and set a passphrase.
-   Armor generates a random data key and stores only its wrapped form — your passphrase is
-   never written to disk. Remember it; without it, or a key file, the data cannot be read.
+1. **Backup targets → `c`.** Name it (for example, `demo-target`) and enter the folder
+   where backups are stored: `~/armor-demo/target`. Press **Enter** on it to validate —
+   Armor writes a probe object, reads it back, and deletes it, so you learn the target is
+   reachable before you rely on it. (Secret fields for network and cloud targets are
+   encrypted at rest; a local folder needs no secret.)
 
-2. **Targets → Create disk target.** Name it (for example, `demo-target`) and enter the
-   destination directory: `~/armor-demo/target`. Secret fields for network and cloud
-   targets are encrypted at rest, but a local folder needs no secret.
+2. **Passwords → `c`.** Give the encryption password a name (for example, `demo`) and
+   choose a password (entered twice). Armor generates a random data key, wraps it with your
+   password, and **caches the password locally** so backups can run unattended. The password
+   is the only secret you need to restore on another machine — remember it. There is no key
+   file to lose.
 
-3. **Targets → Validate.** Pick `demo-target`. Armor writes a probe object, reads it back,
-   and deletes it, then reports success — so you learn the target is reachable before you
-   rely on it.
+3. **Policies → `c`.** Name the policy (for example, `demo-policy`), enter the folder to
+   back up (`~/armor-demo/source`), pick `demo-target` and the `demo` password when
+   prompted, and choose **Full** as the backup type.
 
-4. **Policies → Create.** Name the policy (for example, `demo-policy`), enter the include
-   path `~/armor-demo/source`, then pick `demo-target` and `demo-key` when prompted, and
-   choose **Full** as the backup type.
+4. **Policies → Enter.** With `demo-policy` selected, press **Enter** to **run a backup
+   now**. Armor chunks the files, deduplicates and compresses them, encrypts every chunk,
+   and writes a manifest for this point in time. A progress bar tracks it in the bottom
+   bar, and the activity log reports how many files it captured and how many chunks it
+   wrote versus reused — because `notes-copy.txt` is identical to `notes.txt`, you'll see
+   reuse on the second file.
 
-5. **Policies → Run backup.** Pick `demo-policy`, then enter the passphrase you set for
-   `demo-key`. Armor chunks the files, deduplicates and compresses them, encrypts every
-   chunk, and writes a manifest for this point in time. It reports how many files it
-   captured and how many chunks it wrote versus reused — because `notes-copy.txt` is
-   identical to `notes.txt`, you'll see reuse on the second file.
-
-You can confirm the run under **Jobs → List**: the backup job shows as `Completed`.
+You can confirm the run under **Backup jobs**: the job shows as `Completed`. It is now a
+restore point.
 
 ## A basic restore
 
@@ -120,14 +136,16 @@ Restoring reads one manifest and rebuilds the files, checking every chunk agains
 content hash on the way out. We'll restore to a fresh folder so you can compare against
 the original.
 
-1. **Restore → Restore a point-in-time.** Pick the backup job you just created (it's
-   labeled with its type and completion time).
+1. **Backup jobs → Enter.** Pick the point-in-time you just created (rows show when, which
+   policy, type, status, and file count) and press **Enter**. To browse just one policy's
+   points instead, select the policy under **Policies** and press **r**.
 
-2. Enter the passphrase for `demo-key` when prompted, so Armor can unlock the data.
+2. If the password isn't already cached on this machine, Armor asks for it so it can unlock
+   the data. (After a normal setup it's cached, so it won't ask.)
 
-3. When asked for a **destination root**, enter `~/armor-demo/restored`. (Leaving it blank
-   restores each file to its original path — handy for a real recovery, but for this demo
-   we want a separate folder to compare.)
+3. When asked for a **destination folder**, enter `~/armor-demo/restored`. (Leaving it
+   blank restores each file to its original path — handy for a real recovery, but for this
+   demo we want a separate folder to compare.)
 
 Armor reports how many files and bytes it restored. Confirm the round trip from a shell:
 
@@ -171,19 +189,29 @@ Platform notes for the tray itself:
 
 ### Scheduled, unattended backups
 
-A scheduled backup has no one to type a passphrase, so the agent unlocks a policy's key
-from a **key file** rather than a passphrase. To enable this, create the encryption key
-with a key file (a future menu option; the engine and services already support it), and
-place that key file at:
+A scheduled backup has no one to type a password, so Armor **caches the password on the
+machine** (encrypted at rest with a machine-local key under `~/.armor/state/`) when you
+create an encryption password. When a schedule comes due, the agent unlocks the data key
+from the cached password and runs the backup — no key file, no prompt.
 
-```
-~/.armor/state/keys/<encryptionKeyId>.key
-```
+Create a schedule under **Schedules → `c`**: pick a policy, then answer a plain-English
+frequency form (every N minutes/hours, every day, certain weekdays, a day of the month, or
+an advanced raw cron) and a time of day. Armor builds the cron expression for you; the
+**Schedules** and **Runs** views show the schedule in plain English and the next run time.
+All times are UTC.
 
-protected by normal filesystem permissions. When a schedule comes due, the agent reads the
-key file, unlocks the data key, and runs the backup. Policies whose key isn't available
-this way are simply left for the next tick, so they run the moment the key is provided.
-The scheduler wakes on the interval in `armor.json` (`SchedulerTickSeconds`, default 30).
+Policies whose password isn't cached on a machine are simply left for the next tick, so
+they run the moment the password is available. The scheduler wakes on the interval in
+`armor.json` (`SchedulerTickSeconds`, default 30).
+
+### Disaster recovery on a fresh machine
+
+Because every backup writes the password-wrapped data key and its parameters into a header
+on the target itself, you can recover with only two things: **where the backup is** and
+**the password**. On a brand-new install, open **Recover**, press **c** to point Armor at
+the target location, press **Enter** and type the password, then browse the catalog of
+backups found there and restore everything, a folder, or a single file — no local database
+required.
 
 ### Start the agent automatically
 
@@ -215,14 +243,16 @@ To have the tray appear at login, register the agent with your platform's startu
 
 ## Where your data lives
 
-- **Configuration and state:** `~/.armor/armor.json`, `~/.armor/armor.db`, `~/.armor/state/`.
+- **Configuration and state:** `~/.armor/armor.json`, `~/.armor/armor.db`, `~/.armor/state/`
+  (including the cached, machine-encrypted passwords under `~/.armor/state/keys/`).
 - **Logs:** `~/.armor/logs/`.
-- **Backed-up data:** on the storage target you configured, under a chunk store plus a
-  per-run manifest and a repository header.
+- **Backed-up data:** on the backup target you configured, under a chunk store plus a
+  per-run manifest, a small per-run info sidecar, and a repository header.
 
-To move Armor to a new machine, use **Maintenance → Export self-backup** to bundle your
-configuration, database, and state into one zip, then import it on the new machine — every
-policy, target, key envelope, and backup record comes back, ready to restore. And because
-each target also carries an encrypted header with the wrapped data key, your files remain
-recoverable from the target plus your passphrase or key file even if the local database is
-lost. That is the whole point: a backup you can actually restore.
+To move Armor to a new machine, press **x** in the TUI to export a self-backup — a zip of
+your configuration, database, and state — then import it on the new machine, and every
+policy, target, password envelope, and backup record comes back, ready to restore. But you
+don't even need that: because each target carries an encrypted header with the
+password-wrapped data key, your files remain recoverable from the **target plus the
+password** alone, even if the local database is lost (see *Disaster recovery on a fresh
+machine* above). That is the whole point: a backup you can actually restore.

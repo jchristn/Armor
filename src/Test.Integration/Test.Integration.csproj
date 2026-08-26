@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Test.Integration</AssemblyName>
+    <Description>CLI-driven integration harness: backup, enumerate, and restore against a real backup target (disk or object storage).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Armor.Core\Armor.Core.csproj" />
+  </ItemGroup>
+
+</Project>

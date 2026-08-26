@@ -5,22 +5,25 @@ namespace Armor.Core.Engine
     using System.IO;
     using System.Runtime.CompilerServices;
     using System.Threading;
+    using System.Threading.Tasks;
     using Armor.Core.Models;
 
     /// <summary>
-    /// Enumerates the files a policy includes, applying its exclude patterns (pruning excluded
-    /// directories) and minimum and maximum size bounds. Directories that cannot be read are skipped
-    /// rather than failing the whole run. This type is stateless and thread-safe.
+    /// Walks a policy's include paths and yields the files that pass its exclude patterns and size limits.
+    /// Directory listings are read through <see cref="DirectoryInfo"/> so each file's size, timestamp, and
+    /// attributes come straight from the directory enumeration — no extra per-file stat — and the tree is
+    /// walked once. Directory reads that fail (for example permission denied) are skipped rather than
+    /// throwing.
     /// </summary>
     public sealed class FileEnumerator
     {
         /// <summary>
-        /// Enumerate the absolute paths of files included by a policy.
+        /// Enumerate the files a policy includes, with the metadata read from the directory walk.
         /// </summary>
         /// <param name="policy">The policy. Cannot be null.</param>
-        /// <returns>The included file paths.</returns>
+        /// <returns>The included files.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="policy"/> is null.</exception>
-        public IEnumerable<string> Enumerate(Policy policy)
+        public IEnumerable<ScannedFile> Scan(Policy policy)
         {
             if (policy == null)
                 throw new ArgumentNullException(nameof(policy));
@@ -31,38 +34,42 @@ namespace Armor.Core.Engine
             {
                 if (File.Exists(includePath))
                 {
-                    if (Passes(includePath, policy, matcher))
-                        yield return includePath;
+                    ScannedFile? single = TryScan(new FileInfo(includePath), policy, matcher);
+                    if (single != null)
+                        yield return single;
                 }
                 else if (Directory.Exists(includePath))
                 {
-                    foreach (string file in Walk(includePath, policy, matcher))
+                    foreach (ScannedFile file in Walk(includePath, policy, matcher))
                         yield return file;
                 }
             }
         }
 
         /// <summary>
-        /// Enumerate the absolute paths of files included by a policy, asynchronously.
+        /// Enumerate the files a policy includes, asynchronously. The walk itself is synchronous; the
+        /// method yields to the scheduler periodically so cancellation stays responsive on very large trees.
         /// </summary>
         /// <param name="policy">The policy. Cannot be null.</param>
         /// <param name="token">Cancellation token.</param>
-        /// <returns>An async sequence of included file paths.</returns>
+        /// <returns>An async sequence of included files.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="policy"/> is null.</exception>
-        public async IAsyncEnumerable<string> EnumerateAsync(Policy policy, [EnumeratorCancellation] CancellationToken token = default)
+        public async IAsyncEnumerable<ScannedFile> ScanAsync(Policy policy, [EnumeratorCancellation] CancellationToken token = default)
         {
             if (policy == null)
                 throw new ArgumentNullException(nameof(policy));
 
-            foreach (string file in Enumerate(policy))
+            int counter = 0;
+            foreach (ScannedFile file in Scan(policy))
             {
                 token.ThrowIfCancellationRequested();
                 yield return file;
-                await System.Threading.Tasks.Task.Yield();
+                if ((++counter & 1023) == 0)
+                    await Task.Yield();
             }
         }
 
-        private static IEnumerable<string> Walk(string root, Policy policy, ExcludeMatcher matcher)
+        private static IEnumerable<ScannedFile> Walk(string root, Policy policy, ExcludeMatcher matcher)
         {
             Stack<string> pending = new Stack<string>();
             pending.Push(root);
@@ -70,13 +77,18 @@ namespace Armor.Core.Engine
             while (pending.Count > 0)
             {
                 string current = pending.Pop();
+                DirectoryInfo directory = new DirectoryInfo(current);
 
-                string[] files;
+                FileInfo[] files;
                 try
                 {
-                    files = Directory.GetFiles(current);
+                    files = directory.GetFiles();
                 }
                 catch (UnauthorizedAccessException)
+                {
+                    continue;
+                }
+                catch (DirectoryNotFoundException)
                 {
                     continue;
                 }
@@ -85,18 +97,23 @@ namespace Armor.Core.Engine
                     continue;
                 }
 
-                foreach (string file in files)
+                foreach (FileInfo file in files)
                 {
-                    if (Passes(file, policy, matcher))
-                        yield return file;
+                    ScannedFile? scanned = TryScan(file, policy, matcher);
+                    if (scanned != null)
+                        yield return scanned;
                 }
 
-                string[] directories;
+                DirectoryInfo[] subdirectories;
                 try
                 {
-                    directories = Directory.GetDirectories(current);
+                    subdirectories = directory.GetDirectories();
                 }
                 catch (UnauthorizedAccessException)
+                {
+                    continue;
+                }
+                catch (DirectoryNotFoundException)
                 {
                     continue;
                 }
@@ -105,39 +122,58 @@ namespace Armor.Core.Engine
                     continue;
                 }
 
-                foreach (string directory in directories)
+                foreach (DirectoryInfo subdirectory in subdirectories)
                 {
-                    if (!matcher.IsDirectoryExcluded(directory))
-                        pending.Push(directory);
+                    if (!matcher.IsDirectoryExcluded(subdirectory.FullName))
+                        pending.Push(subdirectory.FullName);
                 }
             }
         }
 
-        private static bool Passes(string file, Policy policy, ExcludeMatcher matcher)
+        private static ScannedFile? TryScan(FileInfo file, Policy policy, ExcludeMatcher matcher)
         {
-            if (matcher.IsFileExcluded(file))
-                return false;
+            if (matcher.IsFileExcluded(file.FullName))
+                return null;
 
             long length;
             try
             {
-                length = new FileInfo(file).Length;
+                length = file.Length;
             }
-            catch (UnauthorizedAccessException)
+            catch (FileNotFoundException)
             {
-                return false;
+                return null;
             }
             catch (IOException)
             {
-                return false;
+                return null;
             }
 
             if (policy.MinFileSizeBytes > 0 && length < policy.MinFileSizeBytes)
-                return false;
+                return null;
             if (policy.MaxFileSizeBytes > 0 && length > policy.MaxFileSizeBytes)
-                return false;
+                return null;
 
-            return true;
+            ScannedFile scanned = new ScannedFile();
+            scanned.Path = file.FullName;
+            scanned.SizeBytes = length;
+            try
+            {
+                scanned.ModifiedUtc = file.LastWriteTimeUtc;
+            }
+            catch (IOException)
+            {
+                scanned.ModifiedUtc = DateTime.MinValue;
+            }
+            try
+            {
+                scanned.ArchiveBit = (file.Attributes & FileAttributes.Archive) == FileAttributes.Archive;
+            }
+            catch (IOException)
+            {
+                scanned.ArchiveBit = false;
+            }
+            return scanned;
         }
     }
 }

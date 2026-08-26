@@ -39,6 +39,19 @@ namespace Armor.Core.Database.Interfaces
         Task<ChunkIndexEntry> AddOrReferenceAsync(ChunkIndexEntry entry, CancellationToken token = default);
 
         /// <summary>
+        /// Insert-or-reference a batch of chunks in a single transaction. Each entry is inserted with a
+        /// reference count of one, or, if the chunk already exists on the target, has its reference count
+        /// incremented; sizes are recorded only on first insert. Committing the whole batch at once keeps a
+        /// backup from paying a durability fsync per chunk, which is the dominant cost of a large run. The
+        /// per-row upsert is atomic, so concurrent batches from parallel workers stay consistent.
+        /// </summary>
+        /// <param name="entries">The chunk entries to insert or reference. Duplicates within the batch are
+        /// applied in order, each incrementing the count.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that completes when the batch is committed.</returns>
+        Task ReferenceBatchAsync(IReadOnlyList<ChunkIndexEntry> entries, CancellationToken token = default);
+
+        /// <summary>
         /// Increment a chunk's reference count.
         /// </summary>
         /// <param name="storageTargetId">Storage target identifier.</param>

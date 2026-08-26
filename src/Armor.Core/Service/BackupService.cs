@@ -1,6 +1,7 @@
 namespace Armor.Core.Service
 {
     using System;
+    using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Engine;
@@ -37,10 +38,11 @@ namespace Armor.Core.Service
         /// <param name="backupTypeOverride">Optional backup type overriding the policy's configured type.</param>
         /// <param name="runRetention">Whether to apply retention after a successful backup.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="progress">Optional observer notified as files are processed.</param>
         /// <returns>The completed backup-job record.</returns>
         /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
         /// <exception cref="ArmorException">Thrown when the policy, target, or key is missing, or the policy is already running.</exception>
-        public async Task<BackupJob> RunAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token = default)
+        public async Task<BackupJob> RunAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token = default, IProgress<BackupProgress>? progress = null)
         {
             if (String.IsNullOrWhiteSpace(policyId))
                 throw new ArgumentNullException(nameof(policyId));
@@ -60,6 +62,26 @@ namespace Armor.Core.Service
             StorageTargetService targetService = new StorageTargetService(_Context.Database, _Context.CredentialProtector);
             IStorageRepository repository = await targetService.BuildRepositoryAsync(policy.StorageTargetId!, token).ConfigureAwait(false);
 
+            // If this policy has produced backups before, its target must already hold a repository. A
+            // missing header means the target is not reachable (for example an unmounted drive) — fail
+            // rather than initialize a fresh repository somewhere it does not belong.
+            bool headerPresent = await repository.ObjectExistsAsync(RepositoryKeys.HeaderKey, token).ConfigureAwait(false);
+            if (!headerPresent)
+            {
+                List<BackupJob> priorJobs = await _Context.Database.BackupJobs.ReadByPolicyAsync(policy.Id, token).ConfigureAwait(false);
+                bool hadCompletedBackup = false;
+                foreach (BackupJob prior in priorJobs)
+                {
+                    if (prior.Status == JobStatusEnum.Completed)
+                    {
+                        hadCompletedBackup = true;
+                        break;
+                    }
+                }
+                if (hadCompletedBackup)
+                    throw new ArmorException("Backup target for policy '" + policy.Name + "' is not reachable — no existing backup repository was found where one is expected. If this is a removable drive, make sure it is connected.");
+            }
+
             RunLock runLock = new RunLock(_Context.Paths.StateDirectory);
             RunLockHandle? handle = runLock.TryAcquire(policy.Id);
             if (handle == null)
@@ -67,16 +89,32 @@ namespace Armor.Core.Service
 
             using (handle)
             {
-                BackupEngine engine = new BackupEngine(_Context.Database);
-                BackupJob job = await engine.RunAsync(policy, repository, policy.StorageTargetId!, encryptionKey, dataKey, _Context.Settings.Chunking, backupTypeOverride, token).ConfigureAwait(false);
-
-                if (runRetention)
+                Diagnostics.ArmorLog.Info("Backup started for policy '" + policy.Name + "' (" + policy.Id + "), type " + (backupTypeOverride ?? policy.BackupType) + ".");
+                try
                 {
-                    RetentionManager retention = new RetentionManager(_Context.Database);
-                    await retention.RunAsync(policy, repository, policy.StorageTargetId!, dataKey, DateTime.UtcNow, token).ConfigureAwait(false);
-                }
+                    BackupEngine engine = new BackupEngine(_Context.Database);
+                    BackupJob job = await engine.RunAsync(policy, repository, policy.StorageTargetId!, encryptionKey, dataKey, _Context.Settings.Chunking, backupTypeOverride, token, progress, policy.MaxParallelism).ConfigureAwait(false);
 
-                return job;
+                    if (runRetention)
+                    {
+                        RetentionManager retention = new RetentionManager(_Context.Database);
+                        await retention.RunAsync(policy, repository, policy.StorageTargetId!, dataKey, DateTime.UtcNow, token).ConfigureAwait(false);
+                    }
+
+                    Diagnostics.ArmorLog.Info("Backup " + job.Status + " for policy '" + policy.Name + "': " + job.FileCount + " files, " + job.BytesTotal + " bytes, " + job.ChunksWritten + " chunks written, " + job.ChunksReused + " reused.");
+                    return job;
+                }
+                catch (OperationCanceledException)
+                {
+                    Diagnostics.ArmorLog.Warn("Backup canceled for policy '" + policy.Name + "' (" + policy.Id + ").");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Diagnostics.ArmorLog.Error("Backup failed for policy '" + policy.Name + "' (" + policy.Id + "): " + ex.Message);
+                    Diagnostics.ArmorLog.Exception(ex, "BackupService", "RunAsync");
+                    throw;
+                }
             }
         }
 

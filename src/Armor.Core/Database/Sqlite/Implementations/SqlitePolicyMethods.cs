@@ -95,6 +95,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
                 "backup_type = " + Sanitizer.Literal(policy.BackupType.ToString()) + ", " +
                 "use_archive_bit = " + Sanitizer.Bool(policy.UseArchiveBit) + ", " +
                 "retention_days = " + Sanitizer.Int(policy.RetentionDays) + ", " +
+                "max_parallelism = " + Sanitizer.Int(policy.MaxParallelism) + ", " +
                 "storage_target_id = " + Sanitizer.Quote(policy.StorageTargetId) + ", " +
                 "encryption_key_id = " + Sanitizer.Quote(policy.EncryptionKeyId) + " " +
                 "WHERE id = " + Sanitizer.Literal(policy.Id) + ";");
@@ -140,7 +141,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
 
         private static string BuildInsert(Policy policy)
         {
-            return "INSERT INTO policies (id, name, enabled, min_file_size_bytes, max_file_size_bytes, backup_type, use_archive_bit, retention_days, storage_target_id, encryption_key_id, created_utc) VALUES (" +
+            return "INSERT INTO policies (id, name, enabled, min_file_size_bytes, max_file_size_bytes, backup_type, use_archive_bit, retention_days, max_parallelism, storage_target_id, encryption_key_id, created_utc) VALUES (" +
                 Sanitizer.Literal(policy.Id) + ", " +
                 Sanitizer.Literal(policy.Name) + ", " +
                 Sanitizer.Bool(policy.Enabled) + ", " +
@@ -149,6 +150,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
                 Sanitizer.Literal(policy.BackupType.ToString()) + ", " +
                 Sanitizer.Bool(policy.UseArchiveBit) + ", " +
                 Sanitizer.Int(policy.RetentionDays) + ", " +
+                Sanitizer.Int(policy.MaxParallelism) + ", " +
                 Sanitizer.Quote(policy.StorageTargetId) + ", " +
                 Sanitizer.Quote(policy.EncryptionKeyId) + ", " +
                 Sanitizer.Timestamp(policy.CreatedUtc) + ");";
@@ -210,6 +212,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
             policy.BackupType = Converters.GetEnum<BackupTypeEnum>(row, "backup_type", BackupTypeEnum.Full);
             policy.UseArchiveBit = Converters.GetBool(row, "use_archive_bit");
             policy.RetentionDays = Converters.GetInt(row, "retention_days");
+            policy.MaxParallelism = Converters.GetInt(row, "max_parallelism");
             policy.StorageTargetId = Converters.GetStringOrNull(row, "storage_target_id");
             policy.EncryptionKeyId = Converters.GetStringOrNull(row, "encryption_key_id");
             policy.CreatedUtc = Converters.GetDateTime(row, "created_utc");

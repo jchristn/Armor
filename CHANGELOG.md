@@ -6,6 +6,34 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Password-based encryption keys.** The TUI now provisions each encryption key from a
+  user-chosen **password** (no key file). The password is cached on the machine, encrypted
+  at rest, so both manual and scheduled backups run unattended, and the password alone
+  recovers the data on a fresh install. Legacy key-file keys still unlock.
+- **TUI redesigned as a dashboard.** A nav sidebar ordered as a setup checklist
+  (backup targets → passwords → policies → schedules, then runs, restore points, recover),
+  a live content table, an ASCII-art header, an in-flight progress bar, and an activity log.
+  Long operations run in the background so the UI stays responsive.
+- **Friendlier language.** "Storage targets" are now "Backup targets"; encryption keys are
+  presented as "encryption passwords"; schedules are shown and confirmed in plain English
+  rather than raw cron, via a guided frequency builder.
+
+### Added
+- **Recover from a target.** A recovery flow that reads the catalog directly off a backup
+  target using only its location and the password — no local database — and restores
+  everything, a folder, or a single file. Backed by a `RecoveryService`/`RecoverySession`
+  in the core and a per-run encrypted metadata sidecar written on the target.
+- **Backup progress reporting.** `BackupService`/`BackupEngine` accept an
+  `IProgress<BackupProgress>`; the TUI shows a live completion bar during a backup.
+- **Runs view and per-policy restore points.** A nav section listing upcoming scheduled
+  runs and anything in progress, plus an `r` shortcut to browse and restore a selected
+  policy's point-in-time backups.
+- **Purge on target delete.** Deleting a backup target can also delete its stored backup
+  data (removing the folder for disk targets), via `StorageTargetService.PurgeAsync`.
+- **Referential-integrity guards.** The TUI blocks deletes that would dangle a reference
+  (a password or target still used by a policy, a policy still used by a schedule).
+
 ### Added
 - **Engine core.** Content-defined chunking (FastCDC), per-chunk compression
   (Deflate/Brotli, whichever is smaller), AES-256-GCM encryption with the chunk
@@ -31,7 +59,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Self-backup.** Export and import of the configuration file, database, and state
   directory as a single zip.
 - **Applications.** `Armor.Agent` (Avalonia system-tray icon + scheduler host) and
-  `Armor.Tui` (TUIKit menu-driven admin console).
+  `Armor.Tui` (TUIKit dashboard console).
 - **Tests.** A Touchstone suite (console, xUnit, NUnit adapters) covering
   configuration, the data layer, cryptography, the chunk store, storage, the backup
   and restore engines, retention, scheduling, self-backup, and the service layer,

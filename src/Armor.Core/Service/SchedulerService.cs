@@ -37,9 +37,10 @@ namespace Armor.Core.Service
         /// </param>
         /// <param name="nowUtc">The current time.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="onError">Optional callback invoked when a single schedule's backup fails; the tick continues with the rest.</param>
         /// <returns>The number of schedules that ran a backup.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="keyProvider"/> is null.</exception>
-        public async Task<int> TickAsync(Func<Policy, Task<byte[]?>> keyProvider, DateTime nowUtc, CancellationToken token = default)
+        public async Task<int> TickAsync(Func<Policy, Task<byte[]?>> keyProvider, DateTime nowUtc, CancellationToken token = default, Action<Schedule, Exception>? onError = null)
         {
             if (keyProvider == null)
                 throw new ArgumentNullException(nameof(keyProvider));
@@ -76,7 +77,23 @@ namespace Armor.Core.Service
                 if (dataKey == null)
                     continue;
 
-                await backupService.RunAsync(policy.Id, dataKey, null, true, token).ConfigureAwait(false);
+                try
+                {
+                    await backupService.RunAsync(policy.Id, dataKey, null, true, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // One policy's failure (for example an unreachable target) must not abort the tick
+                    // or starve the other schedules. Leave this one due so it retries next tick — and
+                    // runs the moment the target is reachable again.
+                    onError?.Invoke(schedule, ex);
+                    continue;
+                }
+
                 _Evaluator.MarkRan(schedule, nowUtc);
                 await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
                 ran += 1;

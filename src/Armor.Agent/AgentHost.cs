@@ -55,7 +55,8 @@ namespace Armor.Agent
             ArmorContext? context = null;
             try
             {
-                context = await ArmorContext.CreateAsync(null, token).ConfigureAwait(false);
+                context = await ArmorContext.CreateAsync(null, token, message => SetStatus(message)).ConfigureAwait(false);
+                await new StartupMaintenance(context).ReconcileInterruptedBackupsAsync(token).ConfigureAwait(false);
                 SchedulerService scheduler = new SchedulerService(context);
                 int tickSeconds = context.Settings.SchedulerTickSeconds;
 
@@ -65,7 +66,11 @@ namespace Armor.Agent
                     {
                         SetStatus("Checking schedules");
                         ArmorContext current = context;
-                        int ran = await scheduler.TickAsync(policy => KeyProviderAsync(current, policy, token), DateTime.UtcNow, token).ConfigureAwait(false);
+                        int ran = await scheduler.TickAsync(
+                            policy => KeyProviderAsync(current, policy, token),
+                            DateTime.UtcNow,
+                            token,
+                            (schedule, ex) => SetStatus("A scheduled backup failed: " + ex.Message)).ConfigureAwait(false);
                         SetStatus(ran > 0 ? "Ran " + ran + " backup(s)" : "Idle");
                     }
                     catch (OperationCanceledException)

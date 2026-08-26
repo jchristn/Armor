@@ -148,6 +148,78 @@ namespace Armor.Core.Database.Sqlite
                     "CREATE INDEX IF NOT EXISTS idx_chunk_index_refcount ON chunk_index (storage_target_id, reference_count);"
                 }));
 
+            migrations.Add(new SchemaMigration(
+                2,
+                "Backup job work list",
+                new List<string>
+                {
+                    // Durable per-file work list for a backup job: seeds during the scan, is marked done as
+                    // files are processed, and is read back to assemble the manifest. It lets a run stream
+                    // its manifest to disk and resume after a failure.
+                    "CREATE TABLE IF NOT EXISTS job_files (" +
+                    "job_id TEXT NOT NULL, " +
+                    "path TEXT NOT NULL, " +
+                    "size_bytes INTEGER NOT NULL DEFAULT 0, " +
+                    "modified_utc TEXT NOT NULL, " +
+                    "archive_bit INTEGER NOT NULL DEFAULT 0, " +
+                    "done INTEGER NOT NULL DEFAULT 0, " +
+                    "chunk_hashes TEXT NULL, " +
+                    "PRIMARY KEY (job_id, path));",
+
+                    "CREATE INDEX IF NOT EXISTS idx_job_files_pending ON job_files (job_id, done, path);"
+                }));
+
+            migrations.Add(new SchemaMigration(
+                3,
+                "Compact job work list",
+                new List<string>
+                {
+                    // Rebuild job_files so a file's (often very long) path is stored only once — in the
+                    // table — instead of also being duplicated into a (job_id, path) primary-key index and
+                    // a (job_id, done, path) secondary index. Rows are addressed by rowid, and the only
+                    // index is (job_id, done, id) which holds no paths. For a multi-million-file backup this
+                    // cuts the on-disk work list roughly five-fold. Any in-flight work lists are discarded;
+                    // an interrupted run simply re-scans on its next attempt.
+                    "DROP TABLE IF EXISTS job_files;",
+
+                    "CREATE TABLE job_files (" +
+                    "id INTEGER PRIMARY KEY, " +
+                    "job_id TEXT NOT NULL, " +
+                    "path TEXT NOT NULL, " +
+                    "size_bytes INTEGER NOT NULL DEFAULT 0, " +
+                    "modified_utc TEXT NOT NULL, " +
+                    "archive_bit INTEGER NOT NULL DEFAULT 0, " +
+                    "done INTEGER NOT NULL DEFAULT 0, " +
+                    "chunk_hashes TEXT NULL);",
+
+                    "CREATE INDEX idx_job_files_job_done ON job_files (job_id, done, id);"
+                }));
+
+            migrations.Add(new SchemaMigration(
+                4,
+                "Heal bare-name excludes to match files and directories",
+                new List<string>
+                {
+                    // Before this version a typed exclude with no trailing slash always defaulted to File,
+                    // and directory pruning was only reachable by adding a slash. A bare name such as
+                    // ".git" therefore matched a file named .git but never pruned the .git *directory*, so
+                    // the walk descended into it and backed up everything inside. Every non-regex File rule
+                    // was really "anything of this name", so promote them to Any (match both a file and a
+                    // directory). Regex rules are left untouched: the graphical per-path excludes are stored
+                    // as regex with a deliberate File or Directory target and must stay exact.
+                    "UPDATE policy_exclude_patterns SET target = 'Any' WHERE is_regex = 0 AND target = 'File';"
+                }));
+
+            migrations.Add(new SchemaMigration(
+                5,
+                "Per-policy parallelism",
+                new List<string>
+                {
+                    // How many files a run of the policy processes at once. Existing policies adopt the
+                    // default; the value is clamped in the model when read and written.
+                    "ALTER TABLE policies ADD COLUMN max_parallelism INTEGER NOT NULL DEFAULT 4;"
+                }));
+
             return migrations;
         }
     }

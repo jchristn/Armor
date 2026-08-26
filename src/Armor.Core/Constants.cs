@@ -32,6 +32,11 @@ namespace Armor.Core
         public const string LogDirectoryName = "logs";
 
         /// <summary>
+        /// Subdirectory name (within the configuration directory) where crash reports are written.
+        /// </summary>
+        public const string CrashLogsDirectoryName = "crash-logs";
+
+        /// <summary>
         /// Default state subdirectory name stored within the configuration directory.
         /// </summary>
         public const string StateDirectoryName = "state";

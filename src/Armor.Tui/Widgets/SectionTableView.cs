@@ -56,6 +56,7 @@ namespace Armor.Tui.Widgets
         private string? _Subtitle;
         private readonly int _PadLeft;
         private readonly int _PadRight;
+        private readonly bool _Bordered;
 
         private const byte HeaderColor = 6;      // cyan
         private const byte SelectedBg = 6;       // cyan bar
@@ -78,16 +79,18 @@ namespace Armor.Tui.Widgets
         /// <param name="headers">Column headers. Cannot be null; may be empty for a headerless list.</param>
         /// <param name="weights">Relative column widths, one per column. Cannot be null.</param>
         /// <param name="showHeader">Whether to draw the header row.</param>
-        /// <param name="padLeft">Blank columns kept to the left of the content. Default is 0.</param>
-        /// <param name="padRight">Blank columns kept to the right of the content. Default is 0.</param>
+        /// <param name="padLeft">Blank columns kept to the left of the content (in addition to the border). Default is 0.</param>
+        /// <param name="padRight">Blank columns kept to the right of the content (in addition to the border). Default is 0.</param>
+        /// <param name="bordered">When true, an uncolored single-line box is drawn and content is inset within it.</param>
         /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
-        public SectionTableView(string[] headers, int[] weights, bool showHeader = true, int padLeft = 0, int padRight = 0)
+        public SectionTableView(string[] headers, int[] weights, bool showHeader = true, int padLeft = 0, int padRight = 0, bool bordered = false)
         {
             _Headers = headers ?? throw new ArgumentNullException(nameof(headers));
             _Weights = weights ?? throw new ArgumentNullException(nameof(weights));
             _ShowHeader = showHeader && headers.Length > 0;
             _PadLeft = Math.Max(0, padLeft);
             _PadRight = Math.Max(0, padRight);
+            _Bordered = bordered;
         }
 
         /// <summary>
@@ -207,27 +210,40 @@ namespace Armor.Tui.Widgets
             CellStyle baseStyle = CellStyle.Default;
             surface.Fill(new Rect(0, 0, width, height), Cell.Blank(baseStyle));
 
-            int left = _PadLeft;
-            int usable = width - _PadLeft - _PadRight;
-            if (usable <= 0)
+            // An uncolored single-line box; content is inset within the border.
+            int inset = 0;
+            if (_Bordered)
+            {
+                surface.DrawBox(new Rect(0, 0, width, height), baseStyle, BorderStyle.Line, string.Empty);
+                inset = 1;
+            }
+
+            int left = inset + _PadLeft;
+            int usable = width - (2 * inset) - _PadLeft - _PadRight;
+            int floor = height - inset; // exclusive bottom of the content area
+            if (usable <= 0 || inset >= floor)
                 return;
 
             int[] widths = ComputeWidths(usable);
-            int y = 0;
+            int y = inset;
 
-            if (!String.IsNullOrEmpty(_Title) && y < height)
+            if (!String.IsNullOrEmpty(_Title) && y < floor)
             {
                 surface.DrawText(left, y, Fit(_Title!, usable), baseStyle.WithForeground(Color.FromPalette(HeaderColor)).WithAttribute(CellAttributes.Bold, true));
                 y++;
             }
 
-            if (!String.IsNullOrEmpty(_Subtitle) && y < height)
+            if (!String.IsNullOrEmpty(_Subtitle) && y < floor)
             {
                 surface.DrawText(left, y, Fit(_Subtitle!, usable), baseStyle.WithForeground(Color.FromPalette(DimColor)));
                 y++;
+
+                // Blank line separating the key-hint row from the content beneath it.
+                if (y < floor)
+                    y++;
             }
 
-            if (_ShowHeader && y < height)
+            if (_ShowHeader && y < floor)
             {
                 CellStyle headerStyle = baseStyle.WithForeground(Color.FromPalette(HeaderColor)).WithAttribute(CellAttributes.Bold, true);
                 DrawCells(surface, left, y, _Headers, widths, headerStyle);
@@ -235,13 +251,13 @@ namespace Armor.Tui.Widgets
             }
 
             int bodyTop = y;
-            int visibleRows = height - bodyTop;
+            int visibleRows = floor - bodyTop;
             if (visibleRows <= 0)
                 return;
 
             if (_Rows.Count == 0)
             {
-                surface.DrawText(left, bodyTop, _EmptyMessage, baseStyle.WithForeground(Color.FromPalette(DimColor)).WithAttribute(CellAttributes.Italic, true));
+                surface.DrawText(left, bodyTop, Fit(_EmptyMessage, usable), baseStyle.WithForeground(Color.FromPalette(DimColor)).WithAttribute(CellAttributes.Italic, true));
                 return;
             }
 

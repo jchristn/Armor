@@ -39,14 +39,18 @@ namespace Armor.Core.Engine
 
                 Regex compiled = pattern.IsRegex ? CompileRegex(pattern.Pattern) : CompileGlob(pattern.Pattern);
 
-                if (pattern.Target == ExcludeTargetEnum.File)
+                // Any applies to both files and directories; File and Directory apply to just their own.
+                bool appliesToFiles = pattern.Target != ExcludeTargetEnum.Directory;
+                bool appliesToDirectories = pattern.Target != ExcludeTargetEnum.File;
+
+                if (appliesToFiles)
                 {
                     if (pattern.IsRegex)
                         _FilePathRegexes.Add(compiled);
                     else
                         _FileNameGlobs.Add(compiled);
                 }
-                else
+                if (appliesToDirectories)
                 {
                     if (pattern.IsRegex)
                         _DirectoryPathRegexes.Add(compiled);

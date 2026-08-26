@@ -45,8 +45,11 @@ namespace Armor.Core.Service
         /// </summary>
         /// <param name="paths">Path resolver. When null, a default <see cref="ArmorPaths"/> is used.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="onMaintenance">Optional sink for progress messages emitted during slow one-time
+        /// database maintenance at startup (migrations, VACUUM). A startup path can route this to the console
+        /// so a large database does not look like a hang while it is being prepared.</param>
         /// <returns>An initialized context.</returns>
-        public static async Task<ArmorContext> CreateAsync(ArmorPaths? paths = null, CancellationToken token = default)
+        public static async Task<ArmorContext> CreateAsync(ArmorPaths? paths = null, CancellationToken token = default, Action<string>? onMaintenance = null)
         {
             ArmorContext context = new ArmorContext();
             context.Paths = paths ?? new ArmorPaths();
@@ -55,6 +58,7 @@ namespace Armor.Core.Service
             context.Settings = await manager.LoadAsync(token).ConfigureAwait(false);
 
             DatabaseSettings databaseSettings = new DatabaseSettings(context.Settings.DatabaseFilename ?? context.Paths.DefaultDatabasePath);
+            databaseSettings.MaintenanceReporter = onMaintenance;
             context.Database = await DatabaseDriverFactory.CreateAndInitializeAsync(databaseSettings, token).ConfigureAwait(false);
 
             context.CredentialProtector = new CredentialProtector(Path.Combine(context.Paths.StateDirectory, "dp.key"));

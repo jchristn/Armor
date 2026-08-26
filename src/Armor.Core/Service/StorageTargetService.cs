@@ -1,9 +1,12 @@
 namespace Armor.Core.Service
 {
     using System;
+    using System.Collections.Generic;
+    using System.IO;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Database;
+    using Armor.Core.Enums;
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
     using Armor.Core.Security;
@@ -106,7 +109,89 @@ namespace Armor.Core.Service
             StorageTarget? target = await ReadDecryptedAsync(id, token).ConfigureAwait(false);
             if (target == null)
                 throw new ArmorException("Storage target '" + id + "' was not found.");
-            return StorageRepositoryFactory.Create(target);
+
+            // For a local/USB target, verify the volume is actually present before touching it, so we
+            // never silently (re-)create the repository on the wrong disk when the drive is unplugged.
+            if (target.Type == StorageTargetTypeEnum.Disk)
+                EnsureDiskVolumeReady(target);
+
+            try
+            {
+                return StorageRepositoryFactory.Create(target);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                throw new ArmorException("Backup target '" + target.Name + "' is not reachable. If it is a removable drive, make sure it is connected.");
+            }
+            catch (IOException ex)
+            {
+                throw new ArmorException("Backup target '" + target.Name + "' is not reachable: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Throws a clear error when a disk target's volume is not present (for example an unplugged
+        /// USB drive), rather than letting a repository be created on the wrong disk.
+        /// </summary>
+        private static void EnsureDiskVolumeReady(StorageTarget target)
+        {
+            if (String.IsNullOrWhiteSpace(target.DiskPath))
+                return;
+
+            string? root;
+            try
+            {
+                root = Path.GetPathRoot(Path.GetFullPath(target.DiskPath!));
+            }
+            catch (Exception)
+            {
+                return; // Unusual path; let the client surface any error.
+            }
+            if (String.IsNullOrEmpty(root))
+                return;
+
+            try
+            {
+                // On Windows this is a drive letter (e.g. "E:\") that reports not-ready when absent.
+                // On a Unix root ("/") this is always ready, so it is a no-op there.
+                DriveInfo drive = new DriveInfo(root);
+                if (!drive.IsReady)
+                    throw new ArmorException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not connected or not ready.");
+            }
+            catch (ArgumentException)
+            {
+                // Not a drive-letter root (e.g. a UNC path); nothing to check here.
+            }
+            catch (IOException)
+            {
+                throw new ArmorException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not ready.");
+            }
+        }
+
+        /// <summary>
+        /// Permanently delete every object in a target's repository — the header, manifests, sidecars,
+        /// and all content chunks — emptying it of backup data. The target row itself is not removed.
+        /// </summary>
+        /// <param name="id">Target identifier. Cannot be null or whitespace.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>The number of objects deleted.</returns>
+        /// <exception cref="ArmorException">Thrown when the target does not exist.</exception>
+        public async Task<int> PurgeAsync(string id, CancellationToken token = default)
+        {
+            IStorageRepository repository = await BuildRepositoryAsync(id, token).ConfigureAwait(false);
+
+            // Collect keys first, then delete, so the enumeration is not disturbed by the deletes.
+            List<string> keys = new List<string>();
+            await foreach (string key in repository.EnumerateKeysAsync(String.Empty, token).ConfigureAwait(false))
+                keys.Add(key);
+
+            int deleted = 0;
+            foreach (string key in keys)
+            {
+                await repository.DeleteObjectAsync(key, token).ConfigureAwait(false);
+                deleted++;
+            }
+            return deleted;
         }
 
         /// <summary>

@@ -10,7 +10,7 @@ Armor is a cross-platform backup application for people who assume the worst abo
 their storage, their network, and their luck. It chunks your files, deduplicates
 and compresses them, encrypts every block with AES-256-GCM, and writes the result
 to whatever target you trust the least — a USB drive, a file share, or a cloud
-bucket — in a form that only your passphrase or key file can reconstruct.
+bucket — in a form that only your password can reconstruct.
 
 > **Status:** the engine and both applications are built and tested end to end. See
 > [`archive/ARMOR_PLAN.md`](archive/ARMOR_PLAN.md) for the build plan and per-phase progress.
@@ -29,11 +29,11 @@ contain it.
 Files are split into content-defined chunks (FastCDC), each identified by its
 SHA-256 hash. Every chunk is compressed, then encrypted with AES-256-GCM under a
 random per-repository data key. That data key is wrapped by a key derived from your
-passphrase (PBKDF2-HMAC-SHA256) and/or unwrapped by a key file — either can restore.
-Per-run manifests map your files to their chunk lists, so restoring a point in time
-reads one manifest and reassembles from the store. Because the wrapped key envelope
-and repository header travel with the data on the target, a fresh machine can restore
-with nothing but the target and your secret.
+password (PBKDF2-HMAC-SHA256); the password is cached locally, encrypted at rest, so
+scheduled backups run unattended. Per-run manifests map your files to their chunk lists,
+so restoring a point in time reads one manifest and reassembles from the store. Because
+the wrapped key envelope and repository header travel with the data on the target, a fresh
+machine can restore with nothing but the target and your password.
 
 ## Storage targets
 
@@ -50,25 +50,26 @@ agent, and a full backup-and-restore round trip — see
 
 Armor keeps everything under `~/.armor`: a JSON configuration file, a SQLite database,
 a `logs/` directory, and a `state/` directory. The first run creates them. Launch the
-TUI and work top to bottom through the menu bar:
+TUI — a dashboard with a nav sidebar ordered as a setup checklist — and work down it:
 
-1. **Keys → Create.** Name an encryption key and set a passphrase. Armor generates a
-   random data key and stores only its wrapped form.
-2. **Targets → Create disk target.** Point it at a folder — an external drive, a
-   mounted share, or any path. **Targets → Validate** writes a probe object, reads it
-   back, and deletes it, so you learn immediately whether the target is reachable.
-3. **Policies → Create.** Choose what to include, the storage target, the encryption
-   key, and whether runs are full, incremental, or differential.
-4. **Policies → Run backup.** Unlock the key with your passphrase and watch the run
-   report how many chunks it wrote versus reused.
-5. **Restore → Restore a point-in-time.** Pick a backup job, unlock, and choose where
-   to write. Restoring to a blank destination rebuilds the original tree there.
+1. **Backup targets → `c`.** Point it at a folder — an external drive, a mounted share,
+   or any path. Press **Enter** to validate: Armor writes a probe object, reads it back,
+   and deletes it, so you learn immediately whether the target is reachable.
+2. **Passwords → `c`.** Name an encryption password and choose a password. Armor generates
+   a random data key, wraps it with your password, and caches the password locally so
+   backups run unattended. The password is the only secret needed to restore — no key file.
+3. **Policies → `c`.** Choose what to include, the backup target, the encryption password,
+   and whether runs are full, incremental, or differential.
+4. **Policies → Enter.** Run a backup now; a progress bar tracks it and the activity log
+   reports how many chunks it wrote versus reused. Each run is a restore point.
+5. **Backup jobs → Enter** (or **r** on a policy). Pick a point-in-time and choose where to
+   write. Restoring to a blank destination rebuilds the original tree there.
 
-For unattended, scheduled backups, run the agent (`Armor.Agent`). It owns the tray
-icon and runs due schedules on the interval in `armor.json`. Because a scheduled run
-has no one to type a passphrase, the agent unlocks a policy's key from a key file at
-`~/.armor/state/keys/<keyId>.key` — provision the key with a key file and place it
-there, protected by filesystem permissions.
+For unattended, scheduled backups, create a schedule (**Schedules → `c`**, a plain-English
+frequency form) and run the agent (`Armor.Agent`). It owns the tray icon and runs due
+schedules on the interval in `armor.json`. Because a scheduled run has no one to type a
+password, the agent unlocks the data key from the password cached (encrypted at rest) under
+`~/.armor/state/`.
 
 ## Storage-target setup
 
@@ -90,13 +91,14 @@ key before they touch the database.
 
 Two independent paths bring Armor back:
 
-- **From the self-backup zip.** Maintenance → Export self-backup writes your
-  configuration, database, and state directory into one archive. On a new machine,
-  drop the archive in and import it, and every policy, target, key envelope, and
-  backup record returns — ready to restore your files.
-- **From the target alone.** Each repository carries a header (`armor.repo.json`) with
-  the wrapped data key and the parameters to unwrap it. Given the target and your
-  passphrase or key file, the data is recoverable even if the local database is gone.
+- **From the self-backup zip.** Press **x** in the TUI to export a self-backup — your
+  configuration, database, and state directory in one archive. On a new machine, drop the
+  archive in and import it, and every policy, target, password envelope, and backup record
+  returns — ready to restore your files.
+- **From the target alone.** Each repository carries a header (`armor.repo.json`) with the
+  password-wrapped data key and the parameters to unwrap it. Given only the **target and
+  the password**, the data is recoverable even if the local database is gone — the TUI's
+  **Recover** section browses the catalog on the target and restores full or partial.
 
 ## Building
 
@@ -107,6 +109,18 @@ dotnet build src/Armor.sln
 dotnet run --project src/Test.Automated        # Touchstone console runner
 dotnet test src/Test.Xunit                     # xUnit adapter
 dotnet test src/Test.Nunit                     # NUnit adapter
+```
+
+To exercise backup → enumerate → restore against a real target (a temp disk directory or an
+object-storage bucket), use the CLI integration harness (`--help` lists every option):
+
+```bash
+# local disk (default)
+dotnet run --project src/Test.Integration -f net10.0 -- --type disk
+# S3 / MinIO, path-style, keep the data for inspection
+dotnet run --project src/Test.Integration -f net10.0 -- --type s3 \
+  --endpoint http://localhost:9000 --access-key A --secret-key B \
+  --bucket armor-test --region us-east-1 --path-style --no-cleanup
 ```
 
 ## License

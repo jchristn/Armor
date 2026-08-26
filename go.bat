@@ -1,4 +1,5 @@
 @echo off
 cd /d "%~dp0"
+taskkill /IM Armor.Tui.exe /F >nul 2>&1
 cd src && dotnet build && cd Armor.Tui\bin\debug\net10.0 && armor.tui
 cd /d "%~dp0"

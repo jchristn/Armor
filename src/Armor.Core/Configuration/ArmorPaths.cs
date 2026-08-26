@@ -48,6 +48,15 @@ namespace Armor.Core.Configuration
         }
 
         /// <summary>
+        /// Absolute path to the crash-report directory within the root directory. Unhandled failures are
+        /// written here as individual timestamped files.
+        /// </summary>
+        public string CrashLogDirectory
+        {
+            get { return Path.Combine(_RootDirectory, Constants.CrashLogsDirectoryName); }
+        }
+
+        /// <summary>
         /// Absolute path to the state directory within the root directory.
         /// </summary>
         public string StateDirectory
@@ -139,6 +148,7 @@ namespace Armor.Core.Configuration
         {
             Directory.CreateDirectory(_RootDirectory);
             Directory.CreateDirectory(LogDirectory);
+            Directory.CreateDirectory(CrashLogDirectory);
             Directory.CreateDirectory(StateDirectory);
         }
     }

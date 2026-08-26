@@ -55,6 +55,7 @@ namespace Test.Shared
                             policy.ExcludePatterns.Add(new ExcludePattern("^cache$", true, ExcludeTargetEnum.Directory));
                             policy.BackupType = BackupTypeEnum.Incremental;
                             policy.RetentionDays = 45;
+                            policy.MaxParallelism = 6;
 
                             await db.Policies.CreateAsync(policy, ct).ConfigureAwait(false);
 
@@ -68,6 +69,13 @@ namespace Test.Shared
                             Check.Equal(ExcludeTargetEnum.Directory, read.ExcludePatterns[1].Target, "target round-trips");
                             Check.Equal(BackupTypeEnum.Incremental, read.BackupType, "backup type round-trips");
                             Check.Equal(45, read.RetentionDays, "retention round-trips");
+                            Check.Equal(6, read.MaxParallelism, "max parallelism round-trips");
+
+                            Policy clampCheck = new Policy();
+                            clampCheck.MaxParallelism = 9999;
+                            Check.Equal(Policy.MaxParallelismLimit, clampCheck.MaxParallelism, "parallelism clamps to the upper limit");
+                            clampCheck.MaxParallelism = 0;
+                            Check.Equal(Policy.MinParallelism, clampCheck.MaxParallelism, "parallelism clamps to the lower limit");
 
                             read.Name = "Docs";
                             read.IncludePaths.Clear();
@@ -306,6 +314,34 @@ namespace Test.Shared
                             Check.False(await db.PolicyState.DeleteAsync(policyId, "/data/file.txt", ct).ConfigureAwait(false), "second delete returns false");
 
                             await db.PolicyState.DropTableAsync(policyId, ct).ConfigureAwait(false);
+                        }
+                    }),
+
+                    Case("JobFilesBatchedDelete", "Deleting a large work list removes every row", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (DatabaseDriverBase db = await OpenAsync(ws.Combine("armor.db"), ct).ConfigureAwait(false))
+                        {
+                            // Seed more rows than one delete batch (5000) so DeleteByJobAsync must loop; the
+                            // batched loop must still remove every row and leave nothing pending.
+                            const int count = 5001;
+                            List<JobFileEntry> entries = new List<JobFileEntry>(count);
+                            for (int i = 0; i < count; i++)
+                            {
+                                JobFileEntry entry = new JobFileEntry();
+                                entry.Path = "/data/file-" + i + ".bin";
+                                entry.SizeBytes = i;
+                                entry.ModifiedUtc = DateTime.UtcNow;
+                                entries.Add(entry);
+                            }
+
+                            await db.JobFiles.AddPendingAsync("job_batch", entries, ct).ConfigureAwait(false);
+                            Check.True(await db.JobFiles.HasPendingAsync("job_batch", ct).ConfigureAwait(false), "seeded rows are pending");
+
+                            await db.JobFiles.DeleteByJobAsync("job_batch", ct).ConfigureAwait(false);
+
+                            Check.False(await db.JobFiles.HasPendingAsync("job_batch", ct).ConfigureAwait(false), "no rows remain pending");
+                            Check.Equal(0, (await db.JobFiles.ReadPendingPageAsync("job_batch", 10, ct).ConfigureAwait(false)).Count, "work list is empty");
                         }
                     }),
 
