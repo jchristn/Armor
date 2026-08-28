@@ -8,6 +8,7 @@ namespace Armor.Tui
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Enums;
+    using Armor.Core.Exceptions;
     using Armor.Core.Models;
     using Armor.Core.Security;
     using Armor.Core.Service;
@@ -84,7 +85,7 @@ namespace Armor.Tui
         }
 
         private const int NavWidth = 20;
-        private const int LogHeight = 10;
+        private const int LogHeight = 15;
         // Tall enough for the header line, a blank line, the three-line progress rectangle, and a
         // trailing blank line — so the rectangle is framed by a linebreak above and below.
         private const int StatusHeight = 6;
@@ -545,27 +546,52 @@ namespace Armor.Tui
 
         private async Task OpenRecoveryAsync(StorageTarget target)
         {
-            string? password = await PromptAsync("Password for the backup at '" + target.Name + "'").ConfigureAwait(false);
-            if (String.IsNullOrWhiteSpace(password))
-                return;
+            RecoveryService recovery = new RecoveryService(_Context);
+            RecoverySession? session = null;
 
-            SetStatus("Opening backup at '" + target.Name + "'");
-
-            RecoverySession session;
-            try
+            // Same-machine recovery: try the password already cached for any policy that writes to this target
+            // before asking. A wrong cached password (or a fresh install with none) falls through to the prompt.
+            foreach (string cached in await CachedPasswordsForTargetAsync(target.Id).ConfigureAwait(false))
             {
-                session = await new RecoveryService(_Context).OpenAsync(target.Id, password!).ConfigureAwait(false);
+                SetStatus("Opening backup at '" + target.Name + "'.");
+                try
+                {
+                    session = await recovery.OpenAsync(target.Id, cached).ConfigureAwait(false);
+                    break;
+                }
+                catch (ArmorCryptoException)
+                {
+                    // Cached password does not unlock this repository; try the next, then prompt.
+                }
+                catch (Exception ex)
+                {
+                    await NotifyAsync("Could not open backup", ex.Message).ConfigureAwait(false);
+                    return;
+                }
             }
-            catch (Exception ex)
+
+            if (session == null)
             {
-                await NotifyAsync("Could not open backup", ex.Message).ConfigureAwait(false);
-                return;
+                string? password = await PromptAsync("Password for the backup at '" + target.Name + "'").ConfigureAwait(false);
+                if (String.IsNullOrWhiteSpace(password))
+                    return;
+
+                SetStatus("Opening backup at '" + target.Name + "'.");
+                try
+                {
+                    session = await recovery.OpenAsync(target.Id, password!).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    await NotifyAsync("Could not open backup", ex.Message).ConfigureAwait(false);
+                    return;
+                }
             }
 
             List<RecoveryPoint> points;
             try
             {
-                points = await session.BrowseAsync().ConfigureAwait(false);
+                points = await session!.BrowseAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -582,6 +608,73 @@ namespace Armor.Tui
             _RecoverSession = session;
             ShowRecoveryCatalog(target.Name, points);
             SetStatus("Opened '" + target.Name + "': " + points.Count + " backup" + (points.Count == 1 ? "" : "s") + " found.");
+        }
+
+        /// <summary>
+        /// Let the user pick a folder or file to restore by navigating the backup's captured tree in the
+        /// hierarchical file selector — drilling in and out — rather than scrolling one flat list of every
+        /// path. Returns the chosen scope and selector, or null when nothing was chosen. The scope is derived
+        /// from what was actually picked (a folder or a file), so it stays correct regardless of the entry mode.
+        /// </summary>
+        private async Task<(RestoreScopeEnum Scope, string Selector)?> PickFromBackupAsync(RecoverySession session, RecoveryPoint point, bool showFiles, string title)
+        {
+            List<string> files;
+            try
+            {
+                files = await session.ListFilesAsync(point).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await NotifyAsync("Could not read the backup contents", ex.Message).ConfigureAwait(false);
+                return null;
+            }
+
+            if (files.Count == 0)
+            {
+                await NotifyAsync("Nothing to restore", "This backup point has no files.").ConfigureAwait(false);
+                return null;
+            }
+
+            ManifestFileSystemProvider provider = new ManifestFileSystemProvider(files);
+            FileSelectOptions options = new FileSelectOptions
+            {
+                Title = title,
+                ShowFiles = showFiles,
+                ShowHidden = true,
+            };
+
+            FileSelection? selection = await App().ShowAsync<FileSelection>(new FileSelectModal(options, provider)).ConfigureAwait(false);
+            if (selection == null || selection.Includes.Count == 0)
+                return null;
+
+            string chosen = selection.Includes[0];
+            RestoreScopeEnum scope = provider.IsDirectory(chosen) ? RestoreScopeEnum.Folder : RestoreScopeEnum.File;
+            return (scope, chosen);
+        }
+
+        /// <summary>
+        /// The distinct cached passwords for the encryption keys used by any policy that writes to the given
+        /// target. Lets recovery open a target without prompting on the machine that made the backup.
+        /// </summary>
+        private async Task<List<string>> CachedPasswordsForTargetAsync(string targetId)
+        {
+            List<string> passwords = new List<string>();
+            HashSet<string> seenKeys = new HashSet<string>(StringComparer.Ordinal);
+            EncryptionKeyService keyService = new EncryptionKeyService(_Context.Database);
+
+            List<Policy> policies = await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false);
+            foreach (Policy policy in policies)
+            {
+                if (!String.Equals(policy.StorageTargetId, targetId, StringComparison.Ordinal))
+                    continue;
+                if (String.IsNullOrEmpty(policy.EncryptionKeyId) || !seenKeys.Add(policy.EncryptionKeyId!))
+                    continue;
+
+                string? password = await keyService.TryReadCachedPasswordAsync(policy.EncryptionKeyId!, _Context.Paths, _Context.CredentialProtector).ConfigureAwait(false);
+                if (!String.IsNullOrEmpty(password))
+                    passwords.Add(password!);
+            }
+            return passwords;
         }
 
         private void ShowRecoveryCatalog(string targetName, List<RecoveryPoint> points)
@@ -624,23 +717,16 @@ namespace Armor.Tui
             RestoreScopeEnum restoreScope = RestoreScopeEnum.All;
             string? selector = null;
 
-            if (scope == 1)
+            if (scope == 1 || scope == 2)
             {
-                List<string> folders = await session.ListFoldersAsync(point).ConfigureAwait(false);
-                string? folder = await PickStringAsync("Choose a folder to restore", folders).ConfigureAwait(false);
-                if (folder == null)
+                (RestoreScopeEnum Scope, string Selector)? picked = await PickFromBackupAsync(
+                    session, point,
+                    showFiles: scope == 2,
+                    title: scope == 2 ? "Choose a file to restore" : "Choose a folder to restore").ConfigureAwait(false);
+                if (picked == null)
                     return;
-                restoreScope = RestoreScopeEnum.Folder;
-                selector = folder;
-            }
-            else if (scope == 2)
-            {
-                List<string> files = await session.ListFilesAsync(point).ConfigureAwait(false);
-                string? file = await PickStringAsync("Choose a file to restore", files).ConfigureAwait(false);
-                if (file == null)
-                    return;
-                restoreScope = RestoreScopeEnum.File;
-                selector = file;
+                restoreScope = picked.Value.Scope;
+                selector = picked.Value.Selector;
             }
 
             (bool proceed, string? destinationRoot) = await AskRestoreDestinationAsync().ConfigureAwait(false);
@@ -654,7 +740,7 @@ namespace Armor.Tui
 
             _Busy = true;
             _ActivityText = "Restoring from " + point.PointInTimeUtc.ToString("u");
-            SetStatus("Restoring from " + point.PointInTimeUtc.ToString("u"));
+            SetStatus("Restoring from " + point.PointInTimeUtc.ToString("u") + ".");
 
             _ = Task.Run(async () =>
             {
@@ -712,6 +798,24 @@ namespace Armor.Tui
                 unit++;
             }
             return unit == 0 ? bytes + " B" : value.ToString("0.0") + " " + units[unit];
+        }
+
+        /// <summary>
+        /// Write a run-statistics block to the activity log after a completed backup: total runtime, files
+        /// and bytes backed up, files and bytes skipped, and the per-second file and byte throughput.
+        /// </summary>
+        private void LogBackupStatistics(BackupJob job, TimeSpan runtime)
+        {
+            double seconds = runtime.TotalSeconds;
+            string runtimeText = ((int)runtime.TotalHours).ToString("D2") + ":" + runtime.Minutes.ToString("D2") + ":" + runtime.Seconds.ToString("D2");
+            double filesPerSecond = seconds > 0 ? job.FileCount / seconds : 0;
+            double bytesPerSecond = seconds > 0 ? job.BytesTotal / seconds : 0;
+
+            SetStatus("Total runtime   : " + runtimeText);
+            SetStatus("Files backed up : " + job.FileCount.ToString("N0") + ", " + FormatBytes(job.BytesTotal));
+            SetStatus("Files skipped   : " + job.SkippedFiles.ToString("N0") + ", " + FormatBytes(job.SkippedBytes));
+            SetStatus("Files/second    : " + filesPerSecond.ToString("N1"));
+            SetStatus("Bytes/second    : " + FormatBytes((long)bytesPerSecond) + "/s");
         }
 
         // ---- Primary (Enter) actions ----------------------------------------
@@ -949,7 +1053,7 @@ namespace Armor.Tui
                 return;
             }
 
-            SetStatus("Testing '" + target.Name + "'");
+            SetStatus("Testing '" + target.Name + "'.");
             try
             {
                 bool ok = await Task.Run(() => service.ValidateAsync(target.Id)).ConfigureAwait(false);
@@ -1913,11 +2017,14 @@ namespace Armor.Tui
                 try
                 {
                     BackupService service = new BackupService(_Context);
+                    DateTime startedAt = DateTime.UtcNow;
                     BackupJob job = await service.RunAsync(policyId, dataKey, null, true, cts.Token, progress).ConfigureAwait(false);
+                    TimeSpan runtime = DateTime.UtcNow - startedAt;
                     Post(() =>
                     {
                         FinishJob(entry);
                         SetStatus("Backup " + job.Status + ": " + job.FileCount + " files, " + job.ChunksWritten + " new / " + job.ChunksReused + " reused chunks.");
+                        LogBackupStatistics(job, runtime);
                         if (_Current == Section.Jobs || _Current == Section.Runs)
                             Launch(LoadCurrentSectionAsync);
                     });
@@ -2031,7 +2138,7 @@ namespace Armor.Tui
 
             _Busy = true;
             _ActivityText = "Validating '" + target.Name + "'";
-            SetStatus("Validating '" + target.Name + "'");
+            SetStatus("Validating '" + target.Name + "'.");
             string targetId = target.Id;
             string targetName = target.Name;
 
@@ -2090,7 +2197,7 @@ namespace Armor.Tui
 
             _Busy = true;
             _ActivityText = "Restoring '" + policy.Name + "'";
-            SetStatus("Restoring");
+            SetStatus("Restoring.");
 
             _ = Task.Run(async () =>
             {
@@ -2146,7 +2253,7 @@ namespace Armor.Tui
                 return;
 
             string databaseFile = _Context.Settings.DatabaseFilename ?? _Context.Paths.DefaultDatabasePath;
-            SetStatus("Exporting self-backup");
+            SetStatus("Exporting self-backup.");
             await Task.Run(() => Armor.Core.Backup.ConfigBackup.ExportAsync(_Context.Paths.ConfigFilePath, databaseFile, _Context.Paths.StateDirectory, destination!)).ConfigureAwait(false);
             SetStatus("Self-backup written to " + destination + ".");
             await NotifyAsync("Self-backup exported", "Written to " + destination + ".").ConfigureAwait(false);
