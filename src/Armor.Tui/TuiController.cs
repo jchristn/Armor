@@ -2743,8 +2743,10 @@ namespace Armor.Tui
 
         private void SetStatus(string text)
         {
-            // No leading space: the log region's left padding supplies the gap after the border.
-            _Log?.WriteLine(DateTime.Now.ToString("HH:mm:ss") + "  " + text);
+            // Every activity-log line carries a severity tag. Status messages the UI writes directly are
+            // informational, so they are tagged [INFO] — matching the [WARN]/[ERROR]/[DEBUG] tags on the
+            // mirrored engine log. No leading space: the log region's left padding supplies the gap.
+            _Log?.WriteLine(DateTime.Now.ToString("HH:mm:ss") + "  [INFO] " + text);
         }
 
         /// <summary>
@@ -2756,7 +2758,9 @@ namespace Armor.Tui
             TuiApplication? app = _App;
             if (app == null)
                 return;
-            string prefix = String.Equals(severity, "Info", StringComparison.Ordinal) ? String.Empty : "[" + severity.ToUpperInvariant() + "] ";
+            // Always tag with the severity ([INFO]/[WARN]/[ERROR]/[DEBUG]) so every activity-log line is
+            // consistently labeled, matching the [INFO] tag on the UI's own status messages.
+            string prefix = "[" + severity.ToUpperInvariant() + "] ";
             string line = DateTime.Now.ToString("HH:mm:ss") + "  " + prefix + message;
             try
             {
