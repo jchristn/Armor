@@ -268,6 +268,36 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("GlobalExcludesRespectPolicyFlag", "The shared global list applies only when the policy opts in", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            string source = Path.Combine(ws.RootDirectory, "source");
+                            WriteFile(source, "keep.txt", Content(60, 2000));
+                            WriteFile(source, "skipdir/junk.txt", Content(61, 2000));
+
+                            // Pin the global list to a single deterministic rule, independent of the seeded
+                            // defaults, so the test asserts the composition behavior and not the default set.
+                            await fx.Database.GlobalExcludes.ReplaceAllAsync(
+                                new[] { new ExcludePattern("skipdir", false, ExcludeTargetEnum.Any) }, ct).ConfigureAwait(false);
+
+                            BackupEngine backup = new BackupEngine(fx.Database);
+
+                            // Opted in (the default): the global rule prunes skipdir, leaving only keep.txt.
+                            Policy optedIn = NewPolicy(source);
+                            Check.True(optedIn.UseGlobalExcludes, "policy opts into global excludes by default");
+                            BackupJob inJob = await backup.RunAsync(optedIn, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
+                            Check.Equal(1L, inJob.FileCount, "global exclude prunes skipdir when the policy opts in");
+
+                            // Opted out: the global rule is ignored, so both files are backed up.
+                            Policy optedOut = NewPolicy(source);
+                            optedOut.UseGlobalExcludes = false;
+                            BackupJob outJob = await backup.RunAsync(optedOut, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
+                            Check.Equal(2L, outJob.FileCount, "global exclude is ignored when the policy opts out");
+                        }
+                    }),
+
                     Case("SizeBoundsHonored", "Minimum and maximum size bounds filter files", async ct =>
                     {
                         using (TempWorkspace ws = new TempWorkspace())

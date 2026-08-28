@@ -130,10 +130,18 @@ namespace Armor.Core.Engine
                 // "scanning" state instead of a stalled bar.
                 if (!resuming)
                 {
+                    // The files a run keeps out are the policy's own exclude rules plus — when the policy opts
+                    // in — the shared global exclude list (build output, package caches, AppData, and the like).
+                    // Both are name/path rules that only ever remove files, so their union needs no ordering.
+                    List<ExcludePattern> effectiveExcludes = new List<ExcludePattern>(policy.ExcludePatterns);
+                    if (policy.UseGlobalExcludes)
+                        effectiveExcludes.AddRange(await _Database.GlobalExcludes.ReadAllAsync(token).ConfigureAwait(false));
+                    ExcludeMatcher matcher = new ExcludeMatcher(effectiveExcludes);
+
                     int scannedFiles = 0;
                     long scannedBytes = 0;
                     List<JobFileEntry> batch = new List<JobFileEntry>(ScanBatchSize);
-                    await foreach (ScannedFile scanned in _Enumerator.ScanAsync(policy, token).ConfigureAwait(false))
+                    await foreach (ScannedFile scanned in _Enumerator.ScanAsync(policy, matcher, token).ConfigureAwait(false))
                     {
                         JobFileEntry pending = new JobFileEntry();
                         pending.Path = scanned.Path;

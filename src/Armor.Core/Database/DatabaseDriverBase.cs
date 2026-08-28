@@ -60,6 +60,11 @@ namespace Armor.Core.Database
         public IPolicyStateMethods PolicyState { get; protected set; } = null!;
 
         /// <summary>
+        /// Shared global exclude-list data-access methods.
+        /// </summary>
+        public IGlobalExcludeMethods GlobalExcludes { get; protected set; } = null!;
+
+        /// <summary>
         /// Per-job work-list (<c>job_files</c>) data-access methods, used to stream a backup's manifest to
         /// disk and to resume a failed run.
         /// </summary>

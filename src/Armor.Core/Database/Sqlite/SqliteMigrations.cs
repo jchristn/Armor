@@ -1,6 +1,7 @@
 namespace Armor.Core.Database.Sqlite
 {
     using System.Collections.Generic;
+    using Armor.Core.Models;
 
     /// <summary>
     /// Defines the ordered, idempotent SQLite schema migrations for Armor. Per-policy state tables
@@ -220,7 +221,46 @@ namespace Armor.Core.Database.Sqlite
                     "ALTER TABLE policies ADD COLUMN max_parallelism INTEGER NOT NULL DEFAULT 4;"
                 }));
 
+            migrations.Add(new SchemaMigration(
+                6,
+                "Shared global exclude list",
+                BuildGlobalExcludeMigration()));
+
             return migrations;
+        }
+
+        /// <summary>
+        /// Build migration 6: create the shared global exclude table, seed it from the built-in defaults,
+        /// and add the per-policy opt-in flag. The flag defaults to 1 so every existing policy immediately
+        /// inherits the global list — the common build/cache/AppData noise leaves every backup without any
+        /// per-policy edits. The seed rows are generated from <see cref="GlobalExcludeDefaults"/> so the
+        /// seeded list and the TUI's "restore defaults" action share one definition.
+        /// </summary>
+        private static List<string> BuildGlobalExcludeMigration()
+        {
+            List<string> statements = new List<string>
+            {
+                "CREATE TABLE IF NOT EXISTS global_exclude_patterns (" +
+                "ordinal INTEGER PRIMARY KEY, " +
+                "pattern TEXT NOT NULL, " +
+                "is_regex INTEGER NOT NULL DEFAULT 0, " +
+                "target TEXT NOT NULL);",
+
+                "ALTER TABLE policies ADD COLUMN use_global_excludes INTEGER NOT NULL DEFAULT 1;",
+            };
+
+            int ordinal = 0;
+            foreach (ExcludePattern pattern in GlobalExcludeDefaults.Create())
+            {
+                statements.Add("INSERT INTO global_exclude_patterns (ordinal, pattern, is_regex, target) VALUES (" +
+                    Sanitizer.Int(ordinal) + ", " +
+                    Sanitizer.Literal(pattern.Pattern) + ", " +
+                    Sanitizer.Bool(pattern.IsRegex) + ", " +
+                    Sanitizer.Literal(pattern.Target.ToString()) + ");");
+                ordinal++;
+            }
+
+            return statements;
         }
     }
 }

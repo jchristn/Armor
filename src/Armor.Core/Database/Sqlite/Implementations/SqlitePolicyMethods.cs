@@ -94,6 +94,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
                 "max_file_size_bytes = " + Sanitizer.Int(policy.MaxFileSizeBytes) + ", " +
                 "backup_type = " + Sanitizer.Literal(policy.BackupType.ToString()) + ", " +
                 "use_archive_bit = " + Sanitizer.Bool(policy.UseArchiveBit) + ", " +
+                "use_global_excludes = " + Sanitizer.Bool(policy.UseGlobalExcludes) + ", " +
                 "retention_days = " + Sanitizer.Int(policy.RetentionDays) + ", " +
                 "max_parallelism = " + Sanitizer.Int(policy.MaxParallelism) + ", " +
                 "storage_target_id = " + Sanitizer.Quote(policy.StorageTargetId) + ", " +
@@ -141,7 +142,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
 
         private static string BuildInsert(Policy policy)
         {
-            return "INSERT INTO policies (id, name, enabled, min_file_size_bytes, max_file_size_bytes, backup_type, use_archive_bit, retention_days, max_parallelism, storage_target_id, encryption_key_id, created_utc) VALUES (" +
+            return "INSERT INTO policies (id, name, enabled, min_file_size_bytes, max_file_size_bytes, backup_type, use_archive_bit, use_global_excludes, retention_days, max_parallelism, storage_target_id, encryption_key_id, created_utc) VALUES (" +
                 Sanitizer.Literal(policy.Id) + ", " +
                 Sanitizer.Literal(policy.Name) + ", " +
                 Sanitizer.Bool(policy.Enabled) + ", " +
@@ -149,6 +150,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
                 Sanitizer.Int(policy.MaxFileSizeBytes) + ", " +
                 Sanitizer.Literal(policy.BackupType.ToString()) + ", " +
                 Sanitizer.Bool(policy.UseArchiveBit) + ", " +
+                Sanitizer.Bool(policy.UseGlobalExcludes) + ", " +
                 Sanitizer.Int(policy.RetentionDays) + ", " +
                 Sanitizer.Int(policy.MaxParallelism) + ", " +
                 Sanitizer.Quote(policy.StorageTargetId) + ", " +
@@ -211,6 +213,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
             policy.MaxFileSizeBytes = Converters.GetLong(row, "max_file_size_bytes");
             policy.BackupType = Converters.GetEnum<BackupTypeEnum>(row, "backup_type", BackupTypeEnum.Full);
             policy.UseArchiveBit = Converters.GetBool(row, "use_archive_bit");
+            policy.UseGlobalExcludes = Converters.GetBool(row, "use_global_excludes");
             policy.RetentionDays = Converters.GetInt(row, "retention_days");
             policy.MaxParallelism = Converters.GetInt(row, "max_parallelism");
             policy.StorageTargetId = Converters.GetStringOrNull(row, "storage_target_id");

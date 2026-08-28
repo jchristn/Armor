@@ -21,14 +21,17 @@ namespace Armor.Core.Engine
         /// Enumerate the files a policy includes, with the metadata read from the directory walk.
         /// </summary>
         /// <param name="policy">The policy. Cannot be null.</param>
+        /// <param name="matcher">The exclude matcher to apply. When null, one is built from the policy's own
+        /// <see cref="Policy.ExcludePatterns"/> alone; callers that also apply the shared global exclude list
+        /// pass a matcher composed from both.</param>
         /// <returns>The included files.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="policy"/> is null.</exception>
-        public IEnumerable<ScannedFile> Scan(Policy policy)
+        public IEnumerable<ScannedFile> Scan(Policy policy, ExcludeMatcher? matcher = null)
         {
             if (policy == null)
                 throw new ArgumentNullException(nameof(policy));
 
-            ExcludeMatcher matcher = new ExcludeMatcher(policy.ExcludePatterns);
+            matcher ??= new ExcludeMatcher(policy.ExcludePatterns);
 
             foreach (string includePath in policy.IncludePaths)
             {
@@ -51,16 +54,18 @@ namespace Armor.Core.Engine
         /// method yields to the scheduler periodically so cancellation stays responsive on very large trees.
         /// </summary>
         /// <param name="policy">The policy. Cannot be null.</param>
+        /// <param name="matcher">The exclude matcher to apply. When null, one is built from the policy's own
+        /// <see cref="Policy.ExcludePatterns"/> alone.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>An async sequence of included files.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="policy"/> is null.</exception>
-        public async IAsyncEnumerable<ScannedFile> ScanAsync(Policy policy, [EnumeratorCancellation] CancellationToken token = default)
+        public async IAsyncEnumerable<ScannedFile> ScanAsync(Policy policy, ExcludeMatcher? matcher = null, [EnumeratorCancellation] CancellationToken token = default)
         {
             if (policy == null)
                 throw new ArgumentNullException(nameof(policy));
 
             int counter = 0;
-            foreach (ScannedFile file in Scan(policy))
+            foreach (ScannedFile file in Scan(policy, matcher))
             {
                 token.ThrowIfCancellationRequested();
                 yield return file;

@@ -94,6 +94,49 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("GlobalExcludesAndPolicyFlag", "Global exclude list seeds, round-trips, and resets; policy flag persists", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (DatabaseDriverBase db = await OpenAsync(ws.Combine("armor.db"), ct).ConfigureAwait(false))
+                        {
+                            // A fresh database is seeded with the built-in defaults by migration 6.
+                            int defaultCount = GlobalExcludeDefaults.Create().Count;
+                            List<ExcludePattern> seeded = await db.GlobalExcludes.ReadAllAsync(ct).ConfigureAwait(false);
+                            Check.Equal(defaultCount, seeded.Count, "global list seeds with the defaults");
+                            Check.Equal(ExcludeTargetEnum.Any, seeded[0].Target, "seeded defaults are Any-target bare names");
+
+                            // The whole list is replaceable and preserves order and flags.
+                            List<ExcludePattern> custom = new List<ExcludePattern>
+                            {
+                                new ExcludePattern("node_modules", false, ExcludeTargetEnum.Any),
+                                new ExcludePattern("^.*/AppData/.*$", true, ExcludeTargetEnum.Directory),
+                            };
+                            await db.GlobalExcludes.ReplaceAllAsync(custom, ct).ConfigureAwait(false);
+                            List<ExcludePattern> readback = await db.GlobalExcludes.ReadAllAsync(ct).ConfigureAwait(false);
+                            Check.Equal(2, readback.Count, "replace stores exactly the supplied list");
+                            Check.Equal("node_modules", readback[0].Pattern, "first rule and order round-trip");
+                            Check.True(readback[1].IsRegex, "regex flag round-trips");
+                            Check.Equal(ExcludeTargetEnum.Directory, readback[1].Target, "target round-trips");
+
+                            // Reset restores the defaults.
+                            await db.GlobalExcludes.ResetToDefaultsAsync(ct).ConfigureAwait(false);
+                            Check.Equal(defaultCount, (await db.GlobalExcludes.ReadAllAsync(ct).ConfigureAwait(false)).Count, "reset restores the defaults");
+
+                            // The per-policy opt-in flag defaults on and round-trips when turned off.
+                            Check.True(new Policy().UseGlobalExcludes, "new policy defaults to using global excludes");
+                            Policy policy = new Policy();
+                            policy.Name = "Opted out";
+                            policy.UseGlobalExcludes = false;
+                            await db.Policies.CreateAsync(policy, ct).ConfigureAwait(false);
+                            Policy? read = await db.Policies.ReadAsync(policy.Id, ct).ConfigureAwait(false);
+                            Check.False(read!.UseGlobalExcludes, "use-global-excludes flag round-trips as false");
+
+                            read.UseGlobalExcludes = true;
+                            await db.Policies.UpdateAsync(read, ct).ConfigureAwait(false);
+                            Check.True((await db.Policies.ReadAsync(policy.Id, ct).ConfigureAwait(false))!.UseGlobalExcludes, "flag updates to true");
+                        }
+                    }),
+
                     Case("PolicyMissingAndNullArgs", "Policy negative cases", async ct =>
                     {
                         using (TempWorkspace ws = new TempWorkspace())

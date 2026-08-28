@@ -82,6 +82,14 @@ namespace Armor.Core.Models
         public bool Enabled { get; set; } = true;
 
         /// <summary>
+        /// When true, the shared global exclude list (see <see cref="GlobalExcludeDefaults"/>) is applied
+        /// to this policy's runs in addition to its own <see cref="ExcludePatterns"/>. This keeps common
+        /// noise — build output, package caches, <c>AppData</c> — out of every backup without repeating the
+        /// rules on each policy. Default is true.
+        /// </summary>
+        public bool UseGlobalExcludes { get; set; } = true;
+
+        /// <summary>
         /// Absolute paths to the files and folders included by this policy. Never null; assigning
         /// null replaces the value with an empty list.
         /// </summary>

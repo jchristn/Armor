@@ -50,6 +50,7 @@ namespace Armor.Core.Database.Sqlite
             ChunkIndex = new SqliteChunkIndexMethods(this);
             PolicyState = new SqlitePolicyStateMethods(this);
             JobFiles = new SqliteJobFileMethods(this);
+            GlobalExcludes = new SqliteGlobalExcludeMethods(this);
         }
 
         /// <inheritdoc/>

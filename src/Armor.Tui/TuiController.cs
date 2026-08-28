@@ -240,6 +240,7 @@ namespace Armor.Tui
             app.Bind("f1", () => Launch(ShowHelpAsync));
             app.Bind("x", () => Launch(ExportSelfBackupAsync));
             app.Bind("s", () => Launch(ShowStatisticsAsync));
+            app.Bind("g", () => Launch(ManageGlobalExcludesAsync));
 
             SetStatus("Armor started. Choose a section on the left; press F1 for help.");
             _ = StartAsync();
@@ -1430,6 +1431,7 @@ namespace Armor.Tui
                     "Retention: " + (policy.RetentionDays <= 0 ? "keep all" : policy.RetentionDays + " days"),
                     "Parallel workers: " + policy.MaxParallelism + (policy.MaxParallelism == 1 ? " (serial)" : ""),
                     "Enabled: " + (policy.Enabled ? "yes" : "no"),
+                    "Use global excludes: " + (policy.UseGlobalExcludes ? "yes" : "no"),
                     "Save changes",
                     "Cancel").ConfigureAwait(false);
 
@@ -1524,6 +1526,9 @@ namespace Armor.Tui
                         policy.Enabled = !policy.Enabled;
                         break;
                     case 9:
+                        policy.UseGlobalExcludes = !policy.UseGlobalExcludes;
+                        break;
+                    case 10:
                         await _Context.Database.Policies.UpdateAsync(policy).ConfigureAwait(false);
                         await LoadCurrentSectionAsync().ConfigureAwait(false);
                         SetStatus("Updated policy '" + policy.Name + "'.");
@@ -2154,6 +2159,7 @@ namespace Armor.Tui
                 HelpRow("r", "Restore points for the selected policy"),
                 HelpRow("F5", "Refresh the current section"),
                 HelpRow("s", "Show backup statistics"),
+                HelpRow("g", "Manage the shared global exclude list"),
                 HelpRow("x", "Export a self-backup"),
                 HelpRow("", ""),
                 HelpRow("Cancel a run", "In 'Runs' press ENTER on it, or TAB to the status area"),
@@ -2330,6 +2336,49 @@ namespace Armor.Tui
         /// Split a policy's exclude rules into the ones the file browser owns (path holes) and the ones
         /// the user typed (globs and free-form regexes).
         /// </summary>
+        /// <summary>
+        /// Manage the shared global exclude list — the rules applied to every policy that has "use global
+        /// excludes" turned on. The list can be edited in the same rule editor policies use, or reset to the
+        /// built-in defaults. Bound to the 'g' key from anywhere in the dashboard.
+        /// </summary>
+        private async Task ManageGlobalExcludesAsync()
+        {
+            while (true)
+            {
+                List<ExcludePattern> current = await _Context.Database.GlobalExcludes.ReadAllAsync().ConfigureAwait(false);
+                int choice = await App().SelectAsync(
+                    "Global excludes — applied to every policy that opts in",
+                    "Edit the rules: " + Count(current.Count, "rule", "rules"),
+                    "Restore the built-in defaults",
+                    "Close").ConfigureAwait(false);
+
+                switch (choice)
+                {
+                    case 0:
+                    {
+                        List<ExcludePattern>? edited = await EditExcludePatternsAsync(current).ConfigureAwait(false);
+                        if (edited != null)
+                        {
+                            await _Context.Database.GlobalExcludes.ReplaceAllAsync(edited).ConfigureAwait(false);
+                            SetStatus("Saved " + Count(edited.Count, "global exclude rule", "global exclude rules") + ".");
+                        }
+                        break;
+                    }
+                    case 1:
+                    {
+                        if (await ConfirmAsync("Replace the global exclude list with the built-in defaults?", "Restore", "Cancel").ConfigureAwait(false))
+                        {
+                            List<ExcludePattern> defaults = await _Context.Database.GlobalExcludes.ResetToDefaultsAsync().ConfigureAwait(false);
+                            SetStatus("Restored " + Count(defaults.Count, "default global exclude rule", "default global exclude rules") + ".");
+                        }
+                        break;
+                    }
+                    default:
+                        return; // Close or Esc.
+                }
+            }
+        }
+
         private static void SplitExcludes(List<ExcludePattern> all, out List<ExcludePattern> uiExcludes, out List<ExcludePattern> manualExcludes)
         {
             uiExcludes = new List<ExcludePattern>();
