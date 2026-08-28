@@ -85,7 +85,7 @@ namespace Armor.Tui
         }
 
         private const int NavWidth = 20;
-        private const int LogHeight = 15;
+        private const int LogHeight = 20;
         // Tall enough for the header line, a blank line, the three-line progress rectangle, and a
         // trailing blank line — so the rectangle is framed by a linebreak above and below.
         private const int StatusHeight = 6;
