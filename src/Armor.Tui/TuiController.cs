@@ -88,7 +88,7 @@ namespace Armor.Tui
         private const int LogHeight = 27;
         // Tall enough for the header line, a blank line, the three-line progress rectangle, and a
         // trailing blank line — so the rectangle is framed by a linebreak above and below.
-        private const int StatusHeight = 8;
+        private const int StatusHeight = 10;
 
         private readonly ArmorContext _Context;
         private readonly bool _ShowSplash;
