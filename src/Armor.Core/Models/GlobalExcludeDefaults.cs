@@ -29,6 +29,11 @@ namespace Armor.Core.Models
 
             // Other-language build and dependency directories for polyglot repositories.
             "__pycache__", ".gradle", "target", "venv", ".venv", "dist", "build",
+
+            // Cross-platform OS-generated metadata and system directories — auto-created, regenerable, and
+            // never user content, so excluding them by name is safe on every platform.
+            ".DS_Store", "Thumbs.db", "desktop.ini", ".thumbnails", "lost+found",
+            ".Spotlight-V100", ".fseventsd", ".DocumentRevisions-V100", ".TemporaryItems", ".Trashes",
         };
 
         /// <summary>

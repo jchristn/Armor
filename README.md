@@ -87,6 +87,24 @@ run has no one to type a
 password, the agent unlocks the data key from the password cached (encrypted at rest) under
 `~/.armor/state/`.
 
+## Best practices
+
+A backup is only as good as what it actually captured. Two habits keep you from discovering a
+gap at the worst possible moment:
+
+1. **Review the exclude lists before your first run.** Armor ships a shared **global exclude
+   list** — build output, package and tool caches, `AppData`, OS-generated metadata (`.DS_Store`,
+   `Thumbs.db`, `lost+found`, and the like) — that every policy uses unless you turn it off
+   (press <kbd>g</kbd> to see and edit it). Each policy can also carry its own excludes. These
+   defaults are deliberately conservative, but only you know your data: skim the global list and
+   your policy's excludes and make sure nothing you care about matches.
+
+2. **Always review your first backup.** After the first run of a new policy, open its restore
+   points (**Backup jobs**, or <kbd>r</kbd> on the policy) and browse the captured tree. Confirm
+   the folders and files you meant to protect are there — that a global or per-policy exclude
+   didn't quietly keep out something you actually wanted. The run-statistics line in the activity
+   log ("Files backed up") is a quick sanity check on the count; browsing the tree is the real one.
+
 ## Storage-target setup
 
 Disk targets need only a path. The network and cloud targets need their provider's
