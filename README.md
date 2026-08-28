@@ -6,6 +6,8 @@
 
 <p align="center"><em>Data protection for the paranoid.</em></p>
 
+<p align="center"><em>Yes, I'm sick of paying for backup software that sucks.</em></p>
+
 Armor is a cross-platform backup application for people who assume the worst about
 their storage, their network, and their luck. It chunks your files, deduplicates
 and compresses them, encrypts every block with AES-256-GCM, and writes the result
