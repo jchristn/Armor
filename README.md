@@ -98,6 +98,8 @@ gap at the worst possible moment:
    (press <kbd>g</kbd> to see and edit it). Each policy can also carry its own excludes. These
    defaults are deliberately conservative, but only you know your data: skim the global list and
    your policy's excludes and make sure nothing you care about matches.
+   [`RECOMMENDED_GLOBAL_EXCLUDES.md`](RECOMMENDED_GLOBAL_EXCLUDES.md) lists, by operating system,
+   what the global list excludes today and additional rules worth considering.
 
 2. **Always review your first backup.** After the first run of a new policy, open its restore
    points (**Backup jobs**, or <kbd>r</kbd> on the policy) and browse the captured tree. Confirm
