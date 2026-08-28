@@ -176,7 +176,8 @@ namespace Armor.Tui
                 "armor",
                 CellStyle.Default,
                 CellStyle.Default.WithForeground(Color.FromPalette(6)),
-                CellStyle.Default,
+                // Border: dark grey (palette 8, "bright black"), used for the framed log and activity areas.
+                CellStyle.Default.WithForeground(Color.FromPalette(8)),
                 CellStyle.Default.WithForeground(Color.FromPalette(8)),
                 false,
                 null, null, null, null, null, null);
@@ -200,18 +201,27 @@ namespace Armor.Tui
             // and the F1 pointer to the full list — are always visible instead of hidden behind F1.
             FooterHints footer = new FooterHints();
 
-            // Application-shell dock layout: a fixed header bar on top, a fixed activity log on the
-            // bottom, the nav sidebar on the left, and the content filling the rest. The dock helpers
-            // hand each region (and its widget) its full height — unlike a bare TopAnchored region,
-            // which only gives a bound widget a single row. Bind widgets to the regions rather than
-            // AddWidget/AddPane, which would create competing regions.
+            // Application-shell layout, built region by region so the log and in-progress activity areas can
+            // carry a border and left/right padding (the DockTop/DockBottom shortcuts create only plain,
+            // unbordered regions). The constraints reproduce the same stack the dock helpers would: header
+            // fixed at the top; hints, log, and status stacked up from the bottom; nav on the left; content
+            // filling the middle. Vertical FromEnd offsets are cumulative from the bottom edge, so the regions
+            // tile without overlap. Padding is 0 everywhere except the framed regions, which get one column of
+            // left/right padding (no top/bottom) inside their border.
+            const int FillMax = 1_000_000;
+            AxisConstraint fullWidth = AxisConstraint.Stretch(0, 0, 1, FillMax);
+            int bottomStack = 1 + LogHeight + StatusHeight; // hints + log + status
+            AxisConstraint middleHeight = AxisConstraint.Stretch(headerHeight, bottomStack, 1, FillMax);
+
             app.Layout = Layout.Create()
-                .DockTop("header", headerHeight)
-                .DockBottom("hints", 1)
-                .DockBottom("log", LogHeight)
-                .DockBottom("status", StatusHeight)
-                .DockLeft("nav", NavWidth)
-                .Fill("content")
+                .Add("header", region => region.Horizontal(fullWidth).Vertical(AxisConstraint.Fixed(0, headerHeight)).WithPadding(0))
+                .Add("hints", region => region.Horizontal(fullWidth).Vertical(AxisConstraint.FromEnd(0, 1)).WithPadding(0))
+                .Add("log", region => region.Horizontal(fullWidth).Vertical(AxisConstraint.FromEnd(1, LogHeight))
+                    .WithBorder(BorderStyle.Line, "Activity log").WithPadding(0).WithHorizontalPadding(1, 1))
+                .Add("status", region => region.Horizontal(fullWidth).Vertical(AxisConstraint.FromEnd(1 + LogHeight, StatusHeight))
+                    .WithBorder(BorderStyle.Line, "Backups in progress").WithPadding(0).WithHorizontalPadding(1, 1))
+                .Add("nav", region => region.Horizontal(AxisConstraint.Fixed(0, NavWidth)).Vertical(middleHeight).WithPadding(0))
+                .Add("content", region => region.Horizontal(AxisConstraint.Stretch(NavWidth, 0, 1, FillMax)).Vertical(middleHeight).WithPadding(0))
                 .Build();
 
             app.Bind("nav", _Nav);
@@ -2722,7 +2732,8 @@ namespace Armor.Tui
 
         private void SetStatus(string text)
         {
-            _Log?.WriteLine(" " + DateTime.Now.ToString("HH:mm:ss") + "  " + text);
+            // No leading space: the log region's left padding supplies the gap after the border.
+            _Log?.WriteLine(DateTime.Now.ToString("HH:mm:ss") + "  " + text);
         }
 
         /// <summary>
@@ -2735,7 +2746,7 @@ namespace Armor.Tui
             if (app == null)
                 return;
             string prefix = String.Equals(severity, "Info", StringComparison.Ordinal) ? String.Empty : "[" + severity.ToUpperInvariant() + "] ";
-            string line = " " + DateTime.Now.ToString("HH:mm:ss") + "  " + prefix + message;
+            string line = DateTime.Now.ToString("HH:mm:ss") + "  " + prefix + message;
             try
             {
                 app.Post(() => _Log?.WriteLine(line));
