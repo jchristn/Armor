@@ -558,6 +558,8 @@ namespace Armor.Core.Engine
             job.ChunksReused += Interlocked.Read(ref state.ChunksReused);
             job.BytesWritten += Interlocked.Read(ref state.BytesWritten);
             job.BytesDeduplicated += Interlocked.Read(ref state.BytesDeduplicated);
+            job.SkippedFiles += Interlocked.Read(ref state.Skipped);
+            job.SkippedBytes += Interlocked.Read(ref state.SkippedBytes);
 
             // Emit a final, unthrottled progress report so an observer always sees the completed totals even
             // if the last per-file report fell inside the throttle window. By now the scan has finished, so the
@@ -621,6 +623,7 @@ namespace Armor.Core.Engine
                     // a different exception and still abort.
                     Diagnostics.ArmorLog.Warn("Skipping unreadable file '" + pending.Path + "': " + (unreadable.InnerException != null ? unreadable.InnerException.Message : unreadable.Message));
                     Interlocked.Increment(ref state.Skipped);
+                    Interlocked.Add(ref state.SkippedBytes, pending.SizeBytes);
                     await _Database.JobFiles.RemoveAsync(pending.Rowid, token).ConfigureAwait(false);
                     return;
                 }
@@ -891,6 +894,7 @@ namespace Armor.Core.Engine
             public long FilesDone;
             public long BytesDone;
             public long Skipped;
+            public long SkippedBytes;
             public long LastReportTick;
         }
 

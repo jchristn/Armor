@@ -265,6 +265,17 @@ namespace Armor.Core.Database.Sqlite
                     "CREATE INDEX idx_job_files_job_done ON job_files (job_id, done, id);"
                 }));
 
+            migrations.Add(new SchemaMigration(
+                9,
+                "Backup-job skipped-file counters",
+                new List<string>
+                {
+                    // Files skipped because they could not be read (locked, permission denied, a broken
+                    // reparse point), and their total size, so a run can report how much it left behind.
+                    "ALTER TABLE backup_jobs ADD COLUMN skipped_files INTEGER NOT NULL DEFAULT 0;",
+                    "ALTER TABLE backup_jobs ADD COLUMN skipped_bytes INTEGER NOT NULL DEFAULT 0;"
+                }));
+
             return migrations;
         }
 

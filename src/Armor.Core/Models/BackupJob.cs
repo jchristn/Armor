@@ -113,6 +113,18 @@ namespace Armor.Core.Models
         public long ChunksReused { get; set; } = 0;
 
         /// <summary>
+        /// Number of source files skipped because they could not be read (locked, permission denied, a
+        /// broken reparse point). Default is 0.
+        /// </summary>
+        public long SkippedFiles { get; set; } = 0;
+
+        /// <summary>
+        /// Total size, in bytes, of the files counted in <see cref="SkippedFiles"/> (their size as seen at
+        /// scan time). Default is 0.
+        /// </summary>
+        public long SkippedBytes { get; set; } = 0;
+
+        /// <summary>
         /// Whether the source scan for this run finished and the work list is therefore complete. A run
         /// processes files while it is still scanning, so a run that crashes mid-scan leaves a partial work
         /// list; this flag lets a resume tell a complete list (process only) from a partial one (discard and

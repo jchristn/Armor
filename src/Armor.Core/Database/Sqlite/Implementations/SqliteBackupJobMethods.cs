@@ -154,7 +154,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
         {
             if (insert)
             {
-                return "INSERT INTO backup_jobs (id, policy_id, backup_type, base_job_id, status, manifest_key, started_utc, completed_utc, file_count, bytes_total, bytes_written, bytes_deduplicated, chunks_written, chunks_reused, scan_complete, error, created_utc) VALUES (" +
+                return "INSERT INTO backup_jobs (id, policy_id, backup_type, base_job_id, status, manifest_key, started_utc, completed_utc, file_count, bytes_total, bytes_written, bytes_deduplicated, chunks_written, chunks_reused, scan_complete, skipped_files, skipped_bytes, error, created_utc) VALUES (" +
                     Sanitizer.Literal(job.Id) + ", " +
                     Sanitizer.Literal(job.PolicyId) + ", " +
                     Sanitizer.Literal(job.BackupType.ToString()) + ", " +
@@ -170,6 +170,8 @@ namespace Armor.Core.Database.Sqlite.Implementations
                     Sanitizer.Int(job.ChunksWritten) + ", " +
                     Sanitizer.Int(job.ChunksReused) + ", " +
                     Sanitizer.Bool(job.ScanComplete) + ", " +
+                    Sanitizer.Int(job.SkippedFiles) + ", " +
+                    Sanitizer.Int(job.SkippedBytes) + ", " +
                     Sanitizer.Quote(job.Error) + ", " +
                     Sanitizer.Timestamp(job.CreatedUtc) + ");";
             }
@@ -189,6 +191,8 @@ namespace Armor.Core.Database.Sqlite.Implementations
                 "chunks_written = " + Sanitizer.Int(job.ChunksWritten) + ", " +
                 "chunks_reused = " + Sanitizer.Int(job.ChunksReused) + ", " +
                 "scan_complete = " + Sanitizer.Bool(job.ScanComplete) + ", " +
+                "skipped_files = " + Sanitizer.Int(job.SkippedFiles) + ", " +
+                "skipped_bytes = " + Sanitizer.Int(job.SkippedBytes) + ", " +
                 "error = " + Sanitizer.Quote(job.Error) + " " +
                 "WHERE id = " + Sanitizer.Literal(job.Id) + ";";
         }
@@ -219,6 +223,8 @@ namespace Armor.Core.Database.Sqlite.Implementations
             job.ChunksWritten = Converters.GetLong(row, "chunks_written");
             job.ChunksReused = Converters.GetLong(row, "chunks_reused");
             job.ScanComplete = Converters.GetBool(row, "scan_complete");
+            job.SkippedFiles = Converters.GetLong(row, "skipped_files");
+            job.SkippedBytes = Converters.GetLong(row, "skipped_bytes");
             job.Error = Converters.GetStringOrNull(row, "error");
             job.CreatedUtc = Converters.GetDateTime(row, "created_utc");
             return job;
