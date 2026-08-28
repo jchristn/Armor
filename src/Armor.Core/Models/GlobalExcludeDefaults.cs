@@ -24,6 +24,9 @@ namespace Armor.Core.Models
             // OS and cache junk — transient or system-owned directories that should never be backed up.
             "Temp", ".cache", "$RECYCLE.BIN", "System Volume Information",
 
+            // Windows user-registry hive and its logs — locked, always changing, and useless in a file backup.
+            "ntuser.dat", "ntuser.dat.*",
+
             // Other-language build and dependency directories for polyglot repositories.
             "__pycache__", ".gradle", "target", "venv", ".venv", "dist", "build",
         };
