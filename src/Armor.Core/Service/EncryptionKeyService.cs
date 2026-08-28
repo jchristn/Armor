@@ -132,6 +132,41 @@ namespace Armor.Core.Service
         }
 
         /// <summary>
+        /// Read the locally cached password for a passphrase key, or null when none is cached on this
+        /// machine. Used by recovery to open a target without prompting when the machine already holds the
+        /// password (the common same-machine case), while a fresh install with no cache falls back to asking.
+        /// </summary>
+        /// <param name="keyId">Key identifier. Null or whitespace yields null.</param>
+        /// <param name="paths">Path resolver used to locate the cached password. Cannot be null.</param>
+        /// <param name="protector">Machine-local protector used to decrypt the cached password. Cannot be null.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>The plaintext cached password, or null when none is available or it cannot be read.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="paths"/> or <paramref name="protector"/> is null.</exception>
+        public async Task<string?> TryReadCachedPasswordAsync(string keyId, ArmorPaths paths, CredentialProtector protector, CancellationToken token = default)
+        {
+            if (paths == null)
+                throw new ArgumentNullException(nameof(paths));
+            if (protector == null)
+                throw new ArgumentNullException(nameof(protector));
+            if (String.IsNullOrWhiteSpace(keyId))
+                return null;
+
+            string passwordPath = paths.PasswordFilePath(keyId);
+            if (!File.Exists(passwordPath))
+                return null;
+
+            try
+            {
+                string protectedPassword = await File.ReadAllTextAsync(passwordPath, token).ConfigureAwait(false);
+                return await protector.UnprotectAsync(protectedPassword, token).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Whether the supplied key can be unlocked without human interaction — its password (or, for
         /// legacy keys, its key file) is cached on this machine.
         /// </summary>

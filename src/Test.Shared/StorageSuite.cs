@@ -77,14 +77,22 @@ namespace Test.Shared
                         {
                             IStorageRepository repo = StorageRepositoryFactory.Create(TestStorage.Resolve(ws, NewPrefix()));
                             await repo.WriteObjectAsync("data/a", new byte[] { 1 }, ct).ConfigureAwait(false);
-                            await repo.WriteObjectAsync("data/b", new byte[] { 2 }, ct).ConfigureAwait(false);
+                            await repo.WriteObjectAsync("data/nested/b", new byte[] { 2 }, ct).ConfigureAwait(false);
                             await repo.WriteObjectAsync("data/c", new byte[] { 3 }, ct).ConfigureAwait(false);
                             await repo.WriteObjectAsync("other/d", new byte[] { 4 }, ct).ConfigureAwait(false);
 
-                            int count = 0;
+                            // Enumerating one prefix must return exactly its keys (root-stripped, recursive) and
+                            // never the objects under a sibling prefix — for a disk target this walks only the
+                            // prefix subtree instead of the whole store.
+                            List<string> keys = new List<string>();
                             await foreach (string key in repo.EnumerateKeysAsync("data/", ct).ConfigureAwait(false))
-                                count++;
-                            Check.Equal(3, count, "three keys under the data prefix");
+                                keys.Add(key);
+                            keys.Sort(StringComparer.Ordinal);
+                            Check.Equal(3, keys.Count, "three keys under the data prefix");
+                            Check.Equal("data/a", keys[0], "first key is root-stripped");
+                            Check.Equal("data/c", keys[1], "second key is root-stripped");
+                            Check.Equal("data/nested/b", keys[2], "nested key is included");
+                            Check.False(keys.Contains("other/d"), "keys under a sibling prefix are excluded");
                         }
                     }),
 

@@ -33,7 +33,13 @@ namespace Armor.Core.Storage
                 throw new ArgumentNullException(nameof(target));
 
             BlobClientBase client = CreateClient(target);
-            return new BlobStorageRepository(client, target.RepositoryRoot);
+
+            // For a local-disk target, hand the repository the base directory so it can enumerate a prefix by
+            // walking just that subtree on the filesystem. The disk client's own enumeration lists the entire
+            // store before filtering, which is unusably slow (it made recovery hang) on a repository holding
+            // millions of chunk objects.
+            string? localRoot = target.Type == StorageTargetTypeEnum.Disk ? target.DiskPath : null;
+            return new BlobStorageRepository(client, target.RepositoryRoot, localRoot);
         }
 
         private static BlobClientBase CreateClient(StorageTarget target)

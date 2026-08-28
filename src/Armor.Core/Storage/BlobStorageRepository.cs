@@ -21,17 +21,24 @@ namespace Armor.Core.Storage
 
         private readonly BlobClientBase _Client;
         private readonly string _RootPrefix;
+        private readonly string? _LocalRoot;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BlobStorageRepository"/> class.
         /// </summary>
         /// <param name="client">The Blobject client. Cannot be null.</param>
         /// <param name="repositoryRoot">Optional repository-root key prefix. May be null or empty.</param>
+        /// <param name="localFilesystemRoot">For a local-disk target, the base directory the client stores
+        /// objects under. When set, <see cref="EnumerateKeysAsync"/> walks the filesystem subtree for the
+        /// requested prefix directly, instead of the underlying client's enumeration — which, for the disk
+        /// provider, lists every object in the store (all chunks) before filtering by prefix, and is
+        /// unusably slow on a repository with millions of chunks. Null for non-disk targets.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="client"/> is null.</exception>
-        public BlobStorageRepository(BlobClientBase client, string? repositoryRoot)
+        public BlobStorageRepository(BlobClientBase client, string? repositoryRoot, string? localFilesystemRoot = null)
         {
             _Client = client ?? throw new ArgumentNullException(nameof(client));
             _RootPrefix = NormalizeRoot(repositoryRoot);
+            _LocalRoot = String.IsNullOrWhiteSpace(localFilesystemRoot) ? null : localFilesystemRoot;
         }
 
         /// <inheritdoc/>
@@ -126,8 +133,20 @@ namespace Armor.Core.Storage
         /// <inheritdoc/>
         public async IAsyncEnumerable<string> EnumerateKeysAsync(string prefix, [EnumeratorCancellation] CancellationToken token = default)
         {
+            string fullPrefix = FullKey(prefix ?? String.Empty);
+
+            // Disk fast path: walk only the requested subtree on the filesystem. The disk client's own
+            // enumeration lists the whole store (every chunk) and filters afterward, which never returns in
+            // reasonable time on a repository with millions of chunks — the exact case that made recovery hang.
+            if (_LocalRoot != null)
+            {
+                foreach (string key in EnumerateKeysOnDisk(fullPrefix, token))
+                    yield return StripRoot(key);
+                yield break;
+            }
+
             EnumerationFilter filter = new EnumerationFilter();
-            filter.Prefix = FullKey(prefix ?? String.Empty);
+            filter.Prefix = fullPrefix;
 
             await foreach (BlobMetadata metadata in _Client.EnumerateAsync(filter, token).ConfigureAwait(false))
             {
@@ -137,6 +156,35 @@ namespace Armor.Core.Storage
                 if (String.IsNullOrEmpty(metadata.Key))
                     continue;
                 yield return StripRoot(metadata.Key);
+            }
+        }
+
+        /// <summary>
+        /// Enumerate the full (root-prefixed) keys of objects on disk whose key starts with
+        /// <paramref name="fullPrefix"/>, by walking only the directory the prefix names rather than the
+        /// whole store. The prefix is split at its last slash: the directory portion scopes the walk, and the
+        /// remaining filename portion (if any) filters within it, matching the string-prefix semantics of the
+        /// client's enumeration.
+        /// </summary>
+        private IEnumerable<string> EnumerateKeysOnDisk(string fullPrefix, CancellationToken token)
+        {
+            string root = _LocalRoot!;
+            int lastSlash = fullPrefix.LastIndexOf('/');
+            string dirKey = lastSlash >= 0 ? fullPrefix.Substring(0, lastSlash) : String.Empty;
+
+            string startDir = dirKey.Length == 0
+                ? root
+                : Path.Combine(root, dirKey.Replace('/', Path.DirectorySeparatorChar));
+
+            if (!Directory.Exists(startDir))
+                yield break;
+
+            foreach (string file in Directory.EnumerateFiles(startDir, "*", SearchOption.AllDirectories))
+            {
+                token.ThrowIfCancellationRequested();
+                string relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+                if (relative.StartsWith(fullPrefix, StringComparison.Ordinal))
+                    yield return relative;
             }
         }
 
