@@ -47,6 +47,11 @@ namespace Armor.Tui
                 Console.WriteLine("Preparing Armor database…");
                 context = await ArmorContext.CreateAsync(paths, default, message => Console.WriteLine("  " + message)).ConfigureAwait(false);
                 await new StartupMaintenance(context).ReconcileInterruptedBackupsAsync().ConfigureAwait(false);
+
+                // Start the scheduler agent if it is not already running, so schedules fire while the
+                // dashboard is open (and it keeps running in the tray afterward). Best-effort — never blocks
+                // or fails TUI startup.
+                AgentLauncher.EnsureRunning(paths);
             }
             catch (Exception ex)
             {

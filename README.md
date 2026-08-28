@@ -56,24 +56,34 @@ Armor keeps everything under `~/.armor`: a JSON configuration file, a SQLite dat
 a `logs/` directory, and a `state/` directory. The first run creates them. Launch the
 TUI — a dashboard with a nav sidebar ordered as a setup checklist — and work down it:
 
-1. **Backup targets → `c`.** Point it at a folder — an external drive, a mounted share,
-   or any path. Press **Enter** to validate: Armor writes a probe object, reads it back,
-   and deletes it, so you learn immediately whether the target is reachable.
-2. **Passwords → `c`.** Name an encryption password and choose a password. Armor generates
-   a random data key, wraps it with your password, and caches the password locally so
-   backups run unattended. The password is the only secret needed to restore — no key file.
-3. **Policies → `c`.** Choose what to include, what to exclude, the backup target, the
-   encryption password, and whether runs are full, incremental, or differential. A shared
-   **global exclude list** — build output, package and tool caches, `AppData`, and the like —
-   keeps the usual noise out of every policy that opts in; manage it any time with **`g`**.
-4. **Policies → Enter.** Run a backup now; a progress bar tracks it and the activity log
-   reports how many chunks it wrote versus reused. Each run is a restore point.
-5. **Backup jobs → Enter** (or **r** on a policy). Pick a point-in-time and choose where to
-   write. Restoring to a blank destination rebuilds the original tree there.
+Keys are shown in brackets — for example, on the **Backup targets** screen press the <kbd>c</kbd>
+key to create a target. The same <kbd>c</kbd> creates on every screen, and <kbd>Enter</kbd> runs
+the screen's main action. A shortcut bar is always visible along the bottom, and <kbd>F1</kbd>
+lists every key.
 
-For unattended, scheduled backups, create a schedule (**Schedules → `c`**, a plain-English
-frequency form) and run the agent (`Armor.Agent`). It owns the tray icon and runs due
-schedules on the interval in `armor.json`. Because a scheduled run has no one to type a
+1. **Backup targets** — press <kbd>c</kbd> to add one. Point it at a folder — an external
+   drive, a mounted share, or any path — then press <kbd>Enter</kbd> to validate: Armor writes a
+   probe object, reads it back, and deletes it, so you learn immediately whether the target is
+   reachable.
+2. **Passwords** — press <kbd>c</kbd> to add one. Name an encryption password and choose a
+   password. Armor generates a random data key, wraps it with your password, and caches the
+   password locally so backups run unattended. The password is the only secret needed to
+   restore — no key file.
+3. **Policies** — press <kbd>c</kbd> to create one. Choose what to include, what to exclude, the
+   backup target, the encryption password, and whether runs are full, incremental, or
+   differential. A shared **global exclude list** — build output, package and tool caches,
+   `AppData`, and the like — keeps the usual noise out of every policy that opts in; press
+   <kbd>g</kbd> any time to manage it.
+4. **Policies** — press <kbd>Enter</kbd> to run a backup now; a progress bar tracks it and the
+   activity log reports how many chunks it wrote versus reused. Each run is a restore point.
+5. **Backup jobs** — press <kbd>Enter</kbd> (or <kbd>r</kbd> on a policy) to pick a point-in-time
+   and choose where to write. Restoring to a blank destination rebuilds the original tree there.
+
+For unattended, scheduled backups, create a schedule (on **Schedules**, press <kbd>c</kbd> for a
+plain-English frequency form). The agent (`Armor.Agent`) owns the tray icon and runs due
+schedules on the interval in `armor.json`; opening the TUI starts it automatically when it is not
+already running, and it keeps running in the tray after you close the TUI. Because a scheduled
+run has no one to type a
 password, the agent unlocks the data key from the password cached (encrypted at rest) under
 `~/.armor/state/`.
 
@@ -97,7 +107,7 @@ key before they touch the database.
 
 Two independent paths bring Armor back:
 
-- **From the self-backup zip.** Press **x** in the TUI to export a self-backup — your
+- **From the self-backup zip.** Press <kbd>x</kbd> in the TUI to export a self-backup — your
   configuration, database, and state directory in one archive. On a new machine, drop the
   archive in and import it, and every policy, target, password envelope, and backup record
   returns — ready to restore your files.

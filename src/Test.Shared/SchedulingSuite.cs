@@ -104,6 +104,24 @@ namespace Test.Shared
                             third!.Dispose();
                             await Task.CompletedTask.ConfigureAwait(false);
                         }
+                    }),
+
+                    Case("AgentInstanceLockGuardsSingleAgent", "Agent single-instance lock reports and excludes a second agent", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        {
+                            string state = ws.Combine("state");
+                            Check.False(AgentInstanceLock.IsRunning(state), "no agent is running before one starts");
+
+                            RunLockHandle? agent = AgentInstanceLock.TryAcquire(state);
+                            Check.NotNull(agent, "the first agent acquires the lock");
+                            Check.True(AgentInstanceLock.IsRunning(state), "a running agent is detected while it holds the lock");
+                            Check.Null(AgentInstanceLock.TryAcquire(state), "a second agent is refused the lock");
+
+                            agent!.Dispose();
+                            Check.False(AgentInstanceLock.IsRunning(state), "no agent is detected after it exits");
+                            await Task.CompletedTask.ConfigureAwait(false);
+                        }
                     })
                 });
         }

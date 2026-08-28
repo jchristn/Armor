@@ -4,6 +4,7 @@ namespace Armor.Agent
     using System.Threading.Tasks;
     using Armor.Core.Configuration;
     using Armor.Core.Diagnostics;
+    using Armor.Core.Scheduling;
     using Avalonia;
     using Avalonia.Controls;
 
@@ -33,11 +34,27 @@ namespace Armor.Agent
             }
             ArmorLog.Initialize(paths.LogDirectory, paths.CrashLogDirectory, "Armor.Agent", false);
             RegisterGlobalHandlers();
+
+            // Single-instance guard: only one agent may own the scheduler at a time. A second launch — for
+            // example the TUI starting an agent when one is already running — exits immediately instead of
+            // putting a duplicate tray icon up and double-ticking the scheduler.
+            RunLockHandle? instance = AgentInstanceLock.TryAcquire(paths.StateDirectory);
+            if (instance == null)
+            {
+                ArmorLog.Info("Another Armor agent is already running; exiting.");
+                ArmorLog.Flush();
+                ArmorLog.Dispose();
+                return 0;
+            }
+
             ArmorLog.Info("Armor agent starting.");
 
             try
             {
-                return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
+                using (instance)
+                {
+                    return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
+                }
             }
             catch (Exception ex)
             {
