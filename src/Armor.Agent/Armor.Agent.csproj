@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\logo.ico" LogicalName="Armor.Agent.logo.ico" />
+    <EmbeddedResource Include="Assets\logo.png" LogicalName="Armor.Agent.logo.png" />
   </ItemGroup>
 
   <ItemGroup>

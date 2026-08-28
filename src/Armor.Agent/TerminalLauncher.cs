@@ -15,8 +15,8 @@ namespace Armor.Agent
         /// </summary>
         public static void LaunchTui()
         {
-            string executablePath = ResolveTuiPath();
-            if (!File.Exists(executablePath))
+            string? executablePath = ResolveTuiPath();
+            if (executablePath == null)
                 return;
 
             try
@@ -45,10 +45,35 @@ namespace Armor.Agent
             }
         }
 
-        private static string ResolveTuiPath()
+        /// <summary>
+        /// Locate the TUI executable: first beside the agent (the installed layout where both ship
+        /// together), then the sibling project output used during development. Returns null when neither
+        /// exists.
+        /// </summary>
+        private static string? ResolveTuiPath()
         {
             string executableName = OperatingSystem.IsWindows() ? "Armor.Tui.exe" : "Armor.Tui";
-            return Path.Combine(AppContext.BaseDirectory, executableName);
+            string baseDir = AppContext.BaseDirectory;
+
+            string beside = Path.Combine(baseDir, executableName);
+            if (File.Exists(beside))
+                return beside;
+
+            // Development layout: .../src/Armor.Agent/bin/<config>/<tfm>/ has a sibling
+            // .../src/Armor.Tui/bin/<config>/<tfm>/ with the same configuration and target framework.
+            string trimmed = baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string agentSegment = Path.DirectorySeparatorChar + "Armor.Agent" + Path.DirectorySeparatorChar;
+            string tuiSegment = Path.DirectorySeparatorChar + "Armor.Tui" + Path.DirectorySeparatorChar;
+            int index = trimmed.LastIndexOf(agentSegment, StringComparison.OrdinalIgnoreCase);
+            if (index >= 0)
+            {
+                string siblingDir = trimmed.Substring(0, index) + tuiSegment + trimmed.Substring(index + agentSegment.Length);
+                string sibling = Path.Combine(siblingDir, executableName);
+                if (File.Exists(sibling))
+                    return sibling;
+            }
+
+            return null;
         }
     }
 }
