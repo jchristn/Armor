@@ -560,6 +560,7 @@ namespace Armor.Core.Engine
             job.BytesDeduplicated += Interlocked.Read(ref state.BytesDeduplicated);
             job.SkippedFiles += Interlocked.Read(ref state.Skipped);
             job.SkippedBytes += Interlocked.Read(ref state.SkippedBytes);
+            job.CopiedFiles += Interlocked.Read(ref state.CopiedFiles);
 
             // Emit a final, unthrottled progress report so an observer always sees the completed totals even
             // if the last per-file report fell inside the throttle window. By now the scan has finished, so the
@@ -631,6 +632,9 @@ namespace Armor.Core.Engine
                 Interlocked.Add(ref state.ChunksReused, framed.ChunksReused);
                 Interlocked.Add(ref state.BytesWritten, framed.BytesWritten);
                 Interlocked.Add(ref state.BytesDeduplicated, framed.BytesDeduplicated);
+                // A file that was actually read and copied this run (chunked and written), as opposed to one
+                // whose chunks were reused wholesale from the baseline of an incremental/differential run.
+                Interlocked.Increment(ref state.CopiedFiles);
                 if (state.Policy.UseArchiveBit)
                     _ChangeDetector.ClearArchiveBit(pending.Path);
             }
@@ -895,6 +899,7 @@ namespace Armor.Core.Engine
             public long BytesDone;
             public long Skipped;
             public long SkippedBytes;
+            public long CopiedFiles;
             public long LastReportTick;
         }
 

@@ -824,14 +824,19 @@ namespace Armor.Tui
         {
             double seconds = runtime.TotalSeconds;
             string runtimeText = ((int)runtime.TotalHours).ToString("D2") + ":" + runtime.Minutes.ToString("D2") + ":" + runtime.Seconds.ToString("D2");
-            double filesPerSecond = seconds > 0 ? job.FileCount / seconds : 0;
-            double bytesPerSecond = seconds > 0 ? job.BytesTotal / seconds : 0;
 
-            SetStatus("Total runtime   : " + runtimeText);
-            SetStatus("Files backed up : " + job.FileCount.ToString("N0") + ", " + FormatBytes(job.BytesTotal));
-            SetStatus("Files skipped   : " + job.SkippedFiles.ToString("N0") + ", " + FormatBytes(job.SkippedBytes));
-            SetStatus("Files/second    : " + filesPerSecond.ToString("N1"));
-            SetStatus("Bytes/second    : " + FormatBytes((long)bytesPerSecond) + "/s");
+            // "Copied" figures reflect the work actually done this run: files that were read and written
+            // (not reused wholesale from an incremental baseline) and the bytes actually written to the
+            // target. For a full backup that is every file; the byte total is the stored (compressed and
+            // encrypted) size that landed on the target.
+            double filesPerSecond = seconds > 0 ? job.CopiedFiles / seconds : 0;
+            double bytesPerSecond = seconds > 0 ? job.BytesWritten / seconds : 0;
+
+            SetStatus("- Total runtime   : " + runtimeText);
+            SetStatus("- Files backed up : " + job.CopiedFiles.ToString("N0") + ", " + FormatBytes(job.BytesWritten));
+            SetStatus("- Files skipped   : " + job.SkippedFiles.ToString("N0") + ", " + FormatBytes(job.SkippedBytes));
+            SetStatus("- Files/second    : " + filesPerSecond.ToString("N1"));
+            SetStatus("- Bytes/second    : " + FormatBytes((long)bytesPerSecond) + "/s");
         }
 
         // ---- Primary (Enter) actions ----------------------------------------

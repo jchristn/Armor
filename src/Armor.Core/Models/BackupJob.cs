@@ -113,6 +113,14 @@ namespace Armor.Core.Models
         public long ChunksReused { get; set; } = 0;
 
         /// <summary>
+        /// Number of files actually read and copied during this run — chunked and written — as opposed to
+        /// files whose chunks were reused wholesale from an incremental/differential baseline. For a full
+        /// run this equals every file backed up. Populated by the run for its completion summary; not
+        /// persisted. Default is 0.
+        /// </summary>
+        public long CopiedFiles { get; set; } = 0;
+
+        /// <summary>
         /// Number of source files skipped because they could not be read (locked, permission denied, a
         /// broken reparse point). Default is 0.
         /// </summary>
