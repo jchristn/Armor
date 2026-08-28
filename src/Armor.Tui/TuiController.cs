@@ -195,6 +195,10 @@ namespace Armor.Tui
             _Log = new Pane("log");
             _JobView = new JobStatusView();
 
+            // A persistent one-row key-hint bar pinned to the very bottom, so the essential shortcuts —
+            // and the F1 pointer to the full list — are always visible instead of hidden behind F1.
+            FooterHints footer = new FooterHints();
+
             // Application-shell dock layout: a fixed header bar on top, a fixed activity log on the
             // bottom, the nav sidebar on the left, and the content filling the rest. The dock helpers
             // hand each region (and its widget) its full height — unlike a bare TopAnchored region,
@@ -202,6 +206,7 @@ namespace Armor.Tui
             // AddWidget/AddPane, which would create competing regions.
             app.Layout = Layout.Create()
                 .DockTop("header", headerHeight)
+                .DockBottom("hints", 1)
                 .DockBottom("log", LogHeight)
                 .DockBottom("status", StatusHeight)
                 .DockLeft("nav", NavWidth)
@@ -211,6 +216,7 @@ namespace Armor.Tui
             app.Bind("nav", _Nav);
             app.Bind("content", _Content);
             app.Bind("header", header);
+            app.Bind("hints", footer);
             // Bind the status workspace as a focusable widget (not a plain pane) so Tab reaches it and
             // the user can step through and manage in-progress backups.
             app.Bind("status", _JobView);

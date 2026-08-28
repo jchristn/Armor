@@ -96,17 +96,23 @@ namespace Armor.Core.Engine
         {
             if (!String.IsNullOrEmpty(job.ManifestKey))
             {
-                Manifest? manifest = await TryLoadManifestAsync(repository, job, dataKey, token).ConfigureAwait(false);
-                if (manifest != null)
+                // Stream the manifest to drop a reference for every chunk it used, then delete all of its
+                // objects (header plus segments). A manifest that cannot be read is treated as referencing
+                // nothing — its chunks are reclaimed later by the unreferenced sweep — and its objects are
+                // still deleted.
+                try
                 {
-                    foreach (ManifestFileEntry entry in manifest.Files)
+                    await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(repository, job.ManifestKey!, job.Id, dataKey, token).ConfigureAwait(false))
                     {
                         foreach (string hash in entry.ChunkHashes)
                             await _Database.ChunkIndex.DecrementReferenceAsync(storageTargetId, hash, token).ConfigureAwait(false);
                     }
                 }
+                catch (Armor.Core.Exceptions.ArmorException)
+                {
+                }
 
-                await repository.DeleteObjectAsync(job.ManifestKey!, token).ConfigureAwait(false);
+                await ManifestStore.DeleteAsync(repository, job.ManifestKey!, job.Id, dataKey, token).ConfigureAwait(false);
             }
 
             await _Database.BackupJobs.DeleteAsync(job.Id, token).ConfigureAwait(false);
@@ -126,17 +132,5 @@ namespace Armor.Core.Engine
             return deleted;
         }
 
-        private static async Task<Manifest?> TryLoadManifestAsync(IStorageRepository repository, BackupJob job, byte[] dataKey, CancellationToken token)
-        {
-            try
-            {
-                byte[] bytes = await repository.ReadObjectAsync(job.ManifestKey!, token).ConfigureAwait(false);
-                return ManifestCodec.Decode(bytes, dataKey, job.Id);
-            }
-            catch (Armor.Core.Exceptions.ArmorException)
-            {
-                return null;
-            }
-        }
     }
 }

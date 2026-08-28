@@ -29,6 +29,10 @@ namespace Armor.Core.Engine
         private const int ScanBatchSize = 500;
         private const int ProcessPageSize = 500;
 
+        // How long the work-list producer waits before re-checking for newly scanned rows when the list has
+        // temporarily drained but the scan is still running.
+        private const int ScanPollMilliseconds = 50;
+
         private readonly DatabaseDriverBase _Database;
         private readonly FileEnumerator _Enumerator = new FileEnumerator();
         private readonly ChangeDetector _ChangeDetector = new ChangeDetector();
@@ -100,8 +104,22 @@ namespace Armor.Core.Engine
                 job = resumable;
                 job.Status = JobStatusEnum.Running;
                 job.Error = null;
+
+                // A resumable run whose scan finished has a complete, trustworthy work list — process only.
+                // One that died mid-scan has a partial list that would silently drop unscanned files, so
+                // discard it and re-scan from scratch under the same job id and baseline. Chunks already
+                // written are content-addressed and dedupe on the rewrite, so the only cost is re-hashing the
+                // files that were processed before the crash.
+                if (job.ScanComplete)
+                {
+                    resuming = true;
+                }
+                else
+                {
+                    await _Database.JobFiles.DeleteByJobAsync(job.Id, token).ConfigureAwait(false);
+                    resuming = false;
+                }
                 await _Database.BackupJobs.UpdateAsync(job, token).ConfigureAwait(false);
-                resuming = true;
             }
             else
             {
@@ -110,6 +128,7 @@ namespace Armor.Core.Engine
                 job.BackupType = backupType;
                 job.Status = JobStatusEnum.Running;
                 job.StartedUtc = DateTime.UtcNow;
+                job.ScanComplete = false;
                 BackupJob? freshBaseline = await ResolveBaselineAsync(policy.Id, backupType, token).ConfigureAwait(false);
                 job.BaseJobId = freshBaseline?.Id;
                 await _Database.BackupJobs.CreateAsync(job, token).ConfigureAwait(false);
@@ -125,10 +144,24 @@ namespace Armor.Core.Engine
                     : await _Database.BackupJobs.ReadAsync(job.BaseJobId!, token).ConfigureAwait(false);
                 Dictionary<string, ManifestFileEntry> baseline = await LoadBaselineEntriesAsync(repository, baselineJob, dataKey, token).ConfigureAwait(false);
 
-                // Phase 1 — scan the source once and stream the work list to the database (skipped on a
-                // resume, where the list already exists). Report the running count so the UI shows a live
-                // "scanning" state instead of a stalled bar.
-                if (!resuming)
+                // Phases 1 and 2 run concurrently. The scanner streams the source into the work list in
+                // batches while a pool of workers drains the list and backs the files up, so processing starts
+                // as soon as the first batch lands instead of waiting for a multi-million-file scan to finish.
+                // A resume whose scan already completed skips scanning and just drains the existing list. The
+                // ScanCoordinator carries the live scanned totals and the "scan finished" signal that lets the
+                // work-list producer tell "temporarily drained" from "truly done".
+                JobFileTotals totals = await _Database.JobFiles.ReadTotalsAsync(job.Id, token).ConfigureAwait(false);
+                ScanCoordinator scan = new ScanCoordinator();
+
+                long skippedFiles;
+                if (resuming)
+                {
+                    scan.SetTotals(totals.FileCount, totals.TotalBytes);
+                    scan.MarkComplete();
+                    skippedFiles = await ProcessPendingFilesAsync(
+                        job, policy, repository, storageTargetId, dataKey, chunking, baseline, backupType, totals, scan, maxParallelism, progress, token).ConfigureAwait(false);
+                }
+                else
                 {
                     // The files a run keeps out are the policy's own exclude rules plus — when the policy opts
                     // in — the shared global exclude list (build output, package caches, AppData, and the like).
@@ -138,57 +171,79 @@ namespace Armor.Core.Engine
                         effectiveExcludes.AddRange(await _Database.GlobalExcludes.ReadAllAsync(token).ConfigureAwait(false));
                     ExcludeMatcher matcher = new ExcludeMatcher(effectiveExcludes);
 
-                    int scannedFiles = 0;
-                    long scannedBytes = 0;
-                    List<JobFileEntry> batch = new List<JobFileEntry>(ScanBatchSize);
-                    await foreach (ScannedFile scanned in _Enumerator.ScanAsync(policy, matcher, token).ConfigureAwait(false))
+                    using (CancellationTokenSource scanFailure = CancellationTokenSource.CreateLinkedTokenSource(token))
                     {
-                        JobFileEntry pending = new JobFileEntry();
-                        pending.Path = scanned.Path;
-                        pending.SizeBytes = scanned.SizeBytes;
-                        pending.ModifiedUtc = scanned.ModifiedUtc;
-                        pending.ArchiveBit = scanned.ArchiveBit;
-                        batch.Add(pending);
-                        scannedFiles++;
-                        scannedBytes += scanned.SizeBytes;
-
-                        if (batch.Count >= ScanBatchSize)
+                        Exception? scanError = null;
+                        Task scanTask = Task.Run(async () =>
                         {
-                            await _Database.JobFiles.AddPendingAsync(job.Id, batch, token).ConfigureAwait(false);
-                            batch.Clear();
-                            progress?.Report(new BackupProgress { Scanning = true, FilesTotal = scannedFiles, BytesTotal = scannedBytes, FilesDone = 0, BytesDone = 0 });
+                            try
+                            {
+                                await ScanIntoWorkListAsync(job, policy, matcher, scan, progress, scanFailure.Token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // A cancel (user stop, or the processor aborting) ends the wait; let the
+                                // processor's own outcome decide cancel-versus-fail.
+                                scan.MarkComplete();
+                                throw;
+                            }
+                            catch (Exception ex)
+                            {
+                                // A scan failure must sink the run rather than back up a partial list: record
+                                // it, release the producer, and cancel the workers.
+                                scanError = ex;
+                                scan.MarkComplete();
+                                scanFailure.Cancel();
+                                throw;
+                            }
+                        }, scanFailure.Token);
+
+                        try
+                        {
+                            skippedFiles = await ProcessPendingFilesAsync(
+                                job, policy, repository, storageTargetId, dataKey, chunking, baseline, backupType, totals, scan, maxParallelism, progress, scanFailure.Token).ConfigureAwait(false);
                         }
+                        catch (Exception) when (scanError != null)
+                        {
+                            // The processor stopped because the scan failed first; observe the scan task and
+                            // surface the scan's error as the run's failure.
+                            await SwallowAsync(scanTask).ConfigureAwait(false);
+                            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(scanError).Throw();
+                            throw; // unreachable.
+                        }
+                        catch
+                        {
+                            // The processor failed on its own; stop the scanner and let its error propagate.
+                            scanFailure.Cancel();
+                            await SwallowAsync(scanTask).ConfigureAwait(false);
+                            throw;
+                        }
+
+                        await scanTask.ConfigureAwait(false);
                     }
-                    if (batch.Count > 0)
-                        await _Database.JobFiles.AddPendingAsync(job.Id, batch, token).ConfigureAwait(false);
-                    progress?.Report(new BackupProgress { Scanning = false, FilesTotal = scannedFiles, BytesTotal = scannedBytes, FilesDone = 0, BytesDone = 0 });
                 }
-
-                JobFileTotals totals = await _Database.JobFiles.ReadTotalsAsync(job.Id, token).ConfigureAwait(false);
-
-                // Phase 2 — process the pending work list with a pool of workers. Hashing, compression and
-                // encryption (the CPU-bound cost) run in parallel across cores; a single-writer-per-hash
-                // guard makes sure each unique chunk blob is written exactly once even when two files hold it
-                // at the same moment; and each file's chunk-index rows plus its done-mark are committed in a
-                // small batched transaction instead of a durability fsync per chunk. A producer streams the
-                // work list to the workers using keyset paging on the rowid, so no file is ever handed out
-                // twice while other workers are still marking earlier files done.
-                long skippedFiles = await ProcessPendingFilesAsync(
-                    job, policy, repository, storageTargetId, dataKey, chunking, baseline, backupType, totals, maxParallelism, progress, token).ConfigureAwait(false);
 
                 if (skippedFiles > 0)
                     Diagnostics.ArmorLog.Warn("Backup of policy '" + policy.Name + "' skipped " + skippedFiles + " unreadable file(s); see earlier warnings for paths.");
 
-                // Phase 3 — assemble the manifest from the completed work list (read in pages), write it
-                // and the metadata sidecar, then delete the work list.
-                Manifest manifest = new Manifest();
-                manifest.JobId = job.Id;
-                manifest.PolicyId = policy.Id;
-                manifest.BackupType = backupType;
-                manifest.BaseJobId = job.BaseJobId;
-                manifest.PointInTimeUtc = job.StartedUtc ?? DateTime.UtcNow;
+                // Phase 3 — assemble the manifest from the completed work list (read in pages) and stream it
+                // to the target as a header plus numbered segment objects, then write the metadata sidecar and
+                // delete the work list. The manifest is never held in memory in full: each done-page is turned
+                // into entries and handed to the writer, which flushes a bounded segment at a time. This keeps
+                // a multi-million-file manifest off the heap and away from the ~2 GB single-object ceiling that
+                // a one-shot serialize-and-encrypt would hit.
+                DateTime pointInTime = job.StartedUtc ?? DateTime.UtcNow;
+                string manifestKey = RepositoryKeys.ManifestKey(policy.Id, job.Id);
+                ManifestHeader manifestHeader = new ManifestHeader
+                {
+                    JobId = job.Id,
+                    PolicyId = policy.Id,
+                    BackupType = backupType,
+                    BaseJobId = job.BaseJobId,
+                    PointInTimeUtc = pointInTime,
+                };
+                ManifestStore.Writer manifestWriter = new ManifestStore.Writer(repository, manifestKey, dataKey, manifestHeader);
 
-                long manifestBytesTotal = 0;
                 long afterRowid = 0;
                 while (true)
                 {
@@ -204,18 +259,15 @@ namespace Armor.Core.Engine
                         entry.ModifiedUtc = done.ModifiedUtc;
                         entry.ArchiveBit = done.ArchiveBit;
                         entry.ChunkHashes = new List<string>(done.ChunkHashes);
-                        manifest.Files.Add(entry);
-                        manifestBytesTotal += done.SizeBytes;
+                        await manifestWriter.AddAsync(entry, token).ConfigureAwait(false);
                         afterRowid = done.Rowid;
                     }
                 }
 
-                string manifestKey = RepositoryKeys.ManifestKey(policy.Id, job.Id);
-                byte[] manifestBytes = ManifestCodec.Encode(manifest, dataKey);
-                await repository.WriteObjectAsync(manifestKey, manifestBytes, token).ConfigureAwait(false);
+                await manifestWriter.CompleteAsync(token).ConfigureAwait(false);
 
-                job.FileCount = manifest.Files.Count;
-                job.BytesTotal = manifestBytesTotal;
+                job.FileCount = manifestWriter.FileCount;
+                job.BytesTotal = manifestWriter.TotalBytes;
 
                 // Write a small encrypted metadata sidecar so the catalog can be listed and described
                 // during recovery without decoding the full manifest.
@@ -223,8 +275,8 @@ namespace Armor.Core.Engine
                 runInfo.JobId = job.Id;
                 runInfo.PolicyId = policy.Id;
                 runInfo.PolicyName = policy.Name;
-                runInfo.BackupType = manifest.BackupType;
-                runInfo.PointInTimeUtc = manifest.PointInTimeUtc;
+                runInfo.BackupType = backupType;
+                runInfo.PointInTimeUtc = pointInTime;
                 runInfo.FileCount = job.FileCount;
                 runInfo.TotalBytes = job.BytesTotal;
                 runInfo.BytesWritten = job.BytesWritten;
@@ -290,6 +342,71 @@ namespace Armor.Core.Engine
             return best;
         }
 
+        /// <summary>
+        /// Scan the source and stream the work list into the database in batches, updating the coordinator's
+        /// running totals as it goes and marking the scan complete (durably) at the end. Runs concurrently
+        /// with the processing workers, which drain the list as it grows.
+        /// </summary>
+        private async Task ScanIntoWorkListAsync(
+            BackupJob job,
+            Policy policy,
+            ExcludeMatcher matcher,
+            ScanCoordinator scan,
+            IProgress<BackupProgress>? progress,
+            CancellationToken token)
+        {
+            List<JobFileEntry> batch = new List<JobFileEntry>(ScanBatchSize);
+            long batchBytes = 0;
+
+            await foreach (ScannedFile scanned in _Enumerator.ScanAsync(policy, matcher, token).ConfigureAwait(false))
+            {
+                JobFileEntry pending = new JobFileEntry();
+                pending.Path = scanned.Path;
+                pending.SizeBytes = scanned.SizeBytes;
+                pending.ModifiedUtc = scanned.ModifiedUtc;
+                pending.ArchiveBit = scanned.ArchiveBit;
+                batch.Add(pending);
+                batchBytes += scanned.SizeBytes;
+
+                if (batch.Count >= ScanBatchSize)
+                {
+                    await _Database.JobFiles.AddPendingAsync(job.Id, batch, token).ConfigureAwait(false);
+                    scan.Add(batch.Count, batchBytes);
+                    batch.Clear();
+                    batchBytes = 0;
+                    progress?.Report(new BackupProgress { Scanning = true, FilesTotal = (int)scan.Files, BytesTotal = scan.Bytes, FilesDone = 0, BytesDone = 0 });
+                }
+            }
+
+            if (batch.Count > 0)
+            {
+                await _Database.JobFiles.AddPendingAsync(job.Id, batch, token).ConfigureAwait(false);
+                scan.Add(batch.Count, batchBytes);
+            }
+
+            // Record durably that the work list is complete before releasing the producer, so a crash after
+            // this point resumes by processing the finished list rather than re-scanning.
+            job.ScanComplete = true;
+            await _Database.BackupJobs.SetScanCompleteAsync(job.Id, true, token).ConfigureAwait(false);
+            scan.MarkComplete();
+        }
+
+        /// <summary>
+        /// Await a task and swallow any exception. Used to observe a background task during error unwinding
+        /// without masking the original failure.
+        /// </summary>
+        private static async Task SwallowAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Intentionally ignored: the caller is already propagating a different, primary exception.
+            }
+        }
+
         private async Task<long> ProcessPendingFilesAsync(
             BackupJob job,
             Policy policy,
@@ -300,6 +417,7 @@ namespace Armor.Core.Engine
             Dictionary<string, ManifestFileEntry> baseline,
             BackupTypeEnum backupType,
             JobFileTotals totals,
+            ScanCoordinator scan,
             int maxParallelism,
             IProgress<BackupProgress>? progress,
             CancellationToken token)
@@ -316,6 +434,7 @@ namespace Armor.Core.Engine
                 Baseline = baseline,
                 BackupType = backupType,
                 Totals = totals,
+                Scan = scan,
                 Progress = progress,
                 FilesDone = totals.DoneCount,
                 BytesDone = totals.DoneBytes,
@@ -332,7 +451,11 @@ namespace Armor.Core.Engine
             using (CancellationTokenSource failure = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 // Producer: stream the pending work list to the workers, paging by rowid so the same file is
-                // never handed out twice even as workers mark earlier files done.
+                // never handed out twice even as workers mark earlier files done. Because the scanner may still
+                // be appending rows, an empty page does not mean "done": only when the page is empty *and* the
+                // scan has finished is the work list truly exhausted. Otherwise the producer waits briefly for
+                // the scanner to add more. New rows always get a higher rowid than the cursor, so nothing is
+                // missed or handed out twice.
                 Task producer = Task.Run(async () =>
                 {
                     try
@@ -342,7 +465,12 @@ namespace Armor.Core.Engine
                         {
                             List<JobFileEntry> page = await _Database.JobFiles.ReadPendingPageAsync(job.Id, afterRowid, ProcessPageSize, failure.Token).ConfigureAwait(false);
                             if (page.Count == 0)
-                                break;
+                            {
+                                if (scan.Complete)
+                                    break;
+                                await Task.Delay(ScanPollMilliseconds, failure.Token).ConfigureAwait(false);
+                                continue;
+                            }
                             foreach (JobFileEntry pending in page)
                             {
                                 afterRowid = pending.Rowid;
@@ -432,13 +560,14 @@ namespace Armor.Core.Engine
             job.BytesDeduplicated += Interlocked.Read(ref state.BytesDeduplicated);
 
             // Emit a final, unthrottled progress report so an observer always sees the completed totals even
-            // if the last per-file report fell inside the throttle window.
+            // if the last per-file report fell inside the throttle window. By now the scan has finished, so the
+            // coordinator holds the final totals (for a resume these were seeded from the stored totals).
             progress?.Report(new BackupProgress
             {
                 Scanning = false,
-                FilesTotal = totals.FileCount,
+                FilesTotal = (int)scan.Files,
                 FilesDone = (int)Interlocked.Read(ref state.FilesDone),
-                BytesTotal = totals.TotalBytes,
+                BytesTotal = scan.Bytes,
                 BytesDone = Interlocked.Read(ref state.BytesDone),
                 CurrentPath = String.Empty,
             });
@@ -642,15 +771,70 @@ namespace Armor.Core.Engine
             if (Interlocked.CompareExchange(ref state.LastReportTick, now, last) != last)
                 return;
 
+            // The total grows while the scan is still running, so read it from the coordinator and flag the
+            // run as still scanning until the scan finishes; the bar then shows progress against a moving
+            // target that settles once scanning completes.
             progress.Report(new BackupProgress
             {
-                Scanning = false,
-                FilesTotal = state.Totals.FileCount,
+                Scanning = !state.Scan.Complete,
+                FilesTotal = (int)state.Scan.Files,
                 FilesDone = (int)filesDone,
-                BytesTotal = state.Totals.TotalBytes,
+                BytesTotal = state.Scan.Bytes,
                 BytesDone = bytesDone,
                 CurrentPath = currentPath,
             });
+        }
+
+        /// <summary>
+        /// Carries the live state of the source scan to the processing side of an overlapped run: the running
+        /// count of scanned files and bytes, and whether the scan has finished. The work-list producer reads
+        /// <see cref="Complete"/> to tell a temporarily drained list from a truly exhausted one, and the
+        /// progress reporter reads the totals so the bar tracks a target that grows until the scan settles. All
+        /// members are thread-safe.
+        /// </summary>
+        private sealed class ScanCoordinator
+        {
+            private long _Files;
+            private long _Bytes;
+            private volatile bool _Complete;
+
+            /// <summary>Files scanned so far.</summary>
+            public long Files
+            {
+                get { return Interlocked.Read(ref _Files); }
+            }
+
+            /// <summary>Bytes scanned so far.</summary>
+            public long Bytes
+            {
+                get { return Interlocked.Read(ref _Bytes); }
+            }
+
+            /// <summary>Whether the scan has finished (or there was nothing to scan).</summary>
+            public bool Complete
+            {
+                get { return _Complete; }
+            }
+
+            /// <summary>Add a scanned batch to the running totals.</summary>
+            public void Add(long files, long bytes)
+            {
+                Interlocked.Add(ref _Files, files);
+                Interlocked.Add(ref _Bytes, bytes);
+            }
+
+            /// <summary>Seed the totals to fixed values (used when resuming a run whose scan already finished).</summary>
+            public void SetTotals(long files, long bytes)
+            {
+                Interlocked.Exchange(ref _Files, files);
+                Interlocked.Exchange(ref _Bytes, bytes);
+            }
+
+            /// <summary>Signal that no more rows will be added to the work list.</summary>
+            public void MarkComplete()
+            {
+                _Complete = true;
+            }
         }
 
         /// <summary>Outcome of considering one chunk for storage: whether its blob was newly written and its sizes.</summary>
@@ -694,6 +878,7 @@ namespace Armor.Core.Engine
             public Dictionary<string, ManifestFileEntry> Baseline = null!;
             public BackupTypeEnum BackupType;
             public JobFileTotals Totals = null!;
+            public ScanCoordinator Scan = null!;
             public IProgress<BackupProgress>? Progress;
 
             public readonly ConcurrentDictionary<string, byte> Present = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
@@ -728,9 +913,10 @@ namespace Armor.Core.Engine
             if (baselineJob == null || String.IsNullOrEmpty(baselineJob.ManifestKey))
                 return map;
 
-            byte[] bytes = await repository.ReadObjectAsync(baselineJob.ManifestKey!, token).ConfigureAwait(false);
-            Manifest manifest = ManifestCodec.Decode(bytes, dataKey, baselineJob.Id);
-            foreach (ManifestFileEntry entry in manifest.Files)
+            // Stream the baseline manifest one segment at a time rather than decoding it whole, so an
+            // incremental against a very large prior backup does not rebuild the entire file list — or a
+            // single oversized buffer — in memory just to key it by path.
+            await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(repository, baselineJob.ManifestKey!, baselineJob.Id, dataKey, token).ConfigureAwait(false))
                 map[entry.Path] = entry;
             return map;
         }

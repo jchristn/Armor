@@ -132,8 +132,8 @@ namespace Armor.Core.Service
 
                 if (point == null)
                 {
-                    Manifest manifest = await LoadManifestAsync(keys.ManifestKey, jobId, token).ConfigureAwait(false);
-                    point = new RecoveryPoint(keys.PolicyId, null, jobId, keys.ManifestKey, manifest.PointInTimeUtc, manifest.BackupType, manifest.Files.Count, SumBytes(manifest));
+                    ManifestHeader header = await ManifestStore.ReadHeaderAsync(_Repository, keys.ManifestKey, jobId, _DataKey, token).ConfigureAwait(false);
+                    point = new RecoveryPoint(keys.PolicyId, null, jobId, keys.ManifestKey, header.PointInTimeUtc, header.BackupType, header.FileCount, header.TotalBytes);
                 }
 
                 points.Add(point);
@@ -155,9 +155,8 @@ namespace Armor.Core.Service
             if (point == null)
                 throw new ArgumentNullException(nameof(point));
 
-            Manifest manifest = await LoadManifestAsync(point.ManifestKey, point.JobId, token).ConfigureAwait(false);
             SortedSet<string> folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (ManifestFileEntry entry in manifest.Files)
+            await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(_Repository, point.ManifestKey, point.JobId, _DataKey, token).ConfigureAwait(false))
             {
                 string normalized = entry.Path.Replace('\\', '/');
                 int slash = normalized.LastIndexOf('/');
@@ -179,9 +178,8 @@ namespace Armor.Core.Service
             if (point == null)
                 throw new ArgumentNullException(nameof(point));
 
-            Manifest manifest = await LoadManifestAsync(point.ManifestKey, point.JobId, token).ConfigureAwait(false);
-            List<string> paths = new List<string>(manifest.Files.Count);
-            foreach (ManifestFileEntry entry in manifest.Files)
+            List<string> paths = new List<string>();
+            await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(_Repository, point.ManifestKey, point.JobId, _DataKey, token).ConfigureAwait(false))
                 paths.Add(entry.Path);
             paths.Sort(StringComparer.OrdinalIgnoreCase);
             return paths;
@@ -213,19 +211,6 @@ namespace Armor.Core.Service
             return engine.RunAsync(restoreJob, synthetic, _Repository, _DataKey, token);
         }
 
-        private async Task<Manifest> LoadManifestAsync(string manifestKey, string jobId, CancellationToken token)
-        {
-            byte[] bytes = await _Repository.ReadObjectAsync(manifestKey, token).ConfigureAwait(false);
-            return ManifestCodec.Decode(bytes, _DataKey, jobId);
-        }
-
-        private static long SumBytes(Manifest manifest)
-        {
-            long total = 0;
-            foreach (ManifestFileEntry entry in manifest.Files)
-                total += entry.SizeBytes;
-            return total;
-        }
 
         private static bool TryParseRunKey(string key, out string policyId, out string jobId, out bool isInfo)
         {

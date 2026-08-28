@@ -128,6 +128,17 @@ namespace Armor.Core.Database.Sqlite.Implementations
         }
 
         /// <inheritdoc/>
+        public async Task SetScanCompleteAsync(string jobId, bool complete, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentNullException(nameof(jobId));
+
+            await _Driver.ExecuteQueryAsync(
+                "UPDATE backup_jobs SET scan_complete = " + Sanitizer.Bool(complete) + " WHERE id = " + Sanitizer.Literal(jobId) + ";",
+                false, token).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc/>
         public async Task<bool> ExistsAsync(string id, CancellationToken token = default)
         {
             if (String.IsNullOrWhiteSpace(id))
@@ -143,7 +154,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
         {
             if (insert)
             {
-                return "INSERT INTO backup_jobs (id, policy_id, backup_type, base_job_id, status, manifest_key, started_utc, completed_utc, file_count, bytes_total, bytes_written, bytes_deduplicated, chunks_written, chunks_reused, error, created_utc) VALUES (" +
+                return "INSERT INTO backup_jobs (id, policy_id, backup_type, base_job_id, status, manifest_key, started_utc, completed_utc, file_count, bytes_total, bytes_written, bytes_deduplicated, chunks_written, chunks_reused, scan_complete, error, created_utc) VALUES (" +
                     Sanitizer.Literal(job.Id) + ", " +
                     Sanitizer.Literal(job.PolicyId) + ", " +
                     Sanitizer.Literal(job.BackupType.ToString()) + ", " +
@@ -158,6 +169,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
                     Sanitizer.Int(job.BytesDeduplicated) + ", " +
                     Sanitizer.Int(job.ChunksWritten) + ", " +
                     Sanitizer.Int(job.ChunksReused) + ", " +
+                    Sanitizer.Bool(job.ScanComplete) + ", " +
                     Sanitizer.Quote(job.Error) + ", " +
                     Sanitizer.Timestamp(job.CreatedUtc) + ");";
             }
@@ -176,6 +188,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
                 "bytes_deduplicated = " + Sanitizer.Int(job.BytesDeduplicated) + ", " +
                 "chunks_written = " + Sanitizer.Int(job.ChunksWritten) + ", " +
                 "chunks_reused = " + Sanitizer.Int(job.ChunksReused) + ", " +
+                "scan_complete = " + Sanitizer.Bool(job.ScanComplete) + ", " +
                 "error = " + Sanitizer.Quote(job.Error) + " " +
                 "WHERE id = " + Sanitizer.Literal(job.Id) + ";";
         }
@@ -205,6 +218,7 @@ namespace Armor.Core.Database.Sqlite.Implementations
             job.BytesDeduplicated = Converters.GetLong(row, "bytes_deduplicated");
             job.ChunksWritten = Converters.GetLong(row, "chunks_written");
             job.ChunksReused = Converters.GetLong(row, "chunks_reused");
+            job.ScanComplete = Converters.GetBool(row, "scan_complete");
             job.Error = Converters.GetStringOrNull(row, "error");
             job.CreatedUtc = Converters.GetDateTime(row, "created_utc");
             return job;

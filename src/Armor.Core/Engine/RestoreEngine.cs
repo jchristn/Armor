@@ -68,12 +68,15 @@ namespace Armor.Core.Engine
 
             try
             {
-                Manifest manifest = await LoadManifestAsync(repository, backupJob, dataKey, token).ConfigureAwait(false);
-                List<ManifestFileEntry> selected = SelectFiles(manifest, restoreJob.Scope, restoreJob.SourceSelector);
+                string? normalizedSelector = String.IsNullOrEmpty(restoreJob.SourceSelector) ? null : Normalize(restoreJob.SourceSelector);
 
-                foreach (ManifestFileEntry entry in selected)
+                // Stream the manifest one segment at a time and restore each in-scope file as it arrives, so a
+                // restore never materializes the whole file list in memory.
+                await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(repository, backupJob.ManifestKey!, backupJob.Id, dataKey, token).ConfigureAwait(false))
                 {
                     token.ThrowIfCancellationRequested();
+                    if (!MatchesScope(entry, restoreJob.Scope, normalizedSelector))
+                        continue;
                     string destination = MapDestination(entry.Path, restoreJob.DestinationRoot);
                     await RestoreFileAsync(entry, destination, repository, dataKey, token).ConfigureAwait(false);
                     restoreJob.FilesRestored += 1;
@@ -126,10 +129,8 @@ namespace Armor.Core.Engine
             if (String.IsNullOrEmpty(backupJob.ManifestKey))
                 throw new ArmorException("Backup job '" + backupJob.Id + "' has no manifest to verify.");
 
-            Manifest manifest = await LoadManifestAsync(repository, backupJob, dataKey, token).ConfigureAwait(false);
-
             long verified = 0;
-            foreach (ManifestFileEntry entry in manifest.Files)
+            await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(repository, backupJob.ManifestKey!, backupJob.Id, dataKey, token).ConfigureAwait(false))
             {
                 foreach (string hash in entry.ChunkHashes)
                 {
@@ -147,40 +148,20 @@ namespace Armor.Core.Engine
             return verified;
         }
 
-        private static async Task<Manifest> LoadManifestAsync(IStorageRepository repository, BackupJob backupJob, byte[] dataKey, CancellationToken token)
-        {
-            byte[] bytes = await repository.ReadObjectAsync(backupJob.ManifestKey!, token).ConfigureAwait(false);
-            return ManifestCodec.Decode(bytes, dataKey, backupJob.Id);
-        }
-
-        private static List<ManifestFileEntry> SelectFiles(Manifest manifest, RestoreScopeEnum scope, string? selector)
+        /// <summary>Whether a file entry falls within the requested restore scope. The selector is expected pre-normalized (forward slashes).</summary>
+        private static bool MatchesScope(ManifestFileEntry entry, RestoreScopeEnum scope, string? normalizedSelector)
         {
             if (scope == RestoreScopeEnum.All)
-                return manifest.Files;
+                return true;
+            if (String.IsNullOrEmpty(normalizedSelector))
+                return false;
 
-            List<ManifestFileEntry> result = new List<ManifestFileEntry>();
-            if (String.IsNullOrEmpty(selector))
-                return result;
+            string normalizedPath = Normalize(entry.Path);
+            if (scope == RestoreScopeEnum.File)
+                return String.Equals(normalizedPath, normalizedSelector, StringComparison.Ordinal);
 
-            string normalizedSelector = Normalize(selector);
-
-            foreach (ManifestFileEntry entry in manifest.Files)
-            {
-                string normalizedPath = Normalize(entry.Path);
-                if (scope == RestoreScopeEnum.File)
-                {
-                    if (String.Equals(normalizedPath, normalizedSelector, StringComparison.Ordinal))
-                        result.Add(entry);
-                }
-                else
-                {
-                    string prefix = normalizedSelector.EndsWith("/", StringComparison.Ordinal) ? normalizedSelector : normalizedSelector + "/";
-                    if (normalizedPath.StartsWith(prefix, StringComparison.Ordinal) || String.Equals(normalizedPath, normalizedSelector, StringComparison.Ordinal))
-                        result.Add(entry);
-                }
-            }
-
-            return result;
+            string prefix = normalizedSelector!.EndsWith("/", StringComparison.Ordinal) ? normalizedSelector! : normalizedSelector + "/";
+            return normalizedPath.StartsWith(prefix, StringComparison.Ordinal) || String.Equals(normalizedPath, normalizedSelector, StringComparison.Ordinal);
         }
 
         private static async Task RestoreFileAsync(ManifestFileEntry entry, string destination, IStorageRepository repository, byte[] dataKey, CancellationToken token)

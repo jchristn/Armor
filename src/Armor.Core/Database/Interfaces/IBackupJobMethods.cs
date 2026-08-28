@@ -74,6 +74,17 @@ namespace Armor.Core.Database.Interfaces
         Task<bool> DeleteAsync(string id, CancellationToken token = default);
 
         /// <summary>
+        /// Set only the scan-complete flag on a job, without touching its other fields. Used by a live run to
+        /// durably record that its source scan finished, so a resume after a later crash processes the
+        /// complete work list instead of re-scanning.
+        /// </summary>
+        /// <param name="jobId">Backup job identifier. Cannot be null or whitespace.</param>
+        /// <param name="complete">The flag value to store.</param>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>A task that completes when the flag is written.</returns>
+        Task SetScanCompleteAsync(string jobId, bool complete, CancellationToken token = default);
+
+        /// <summary>
         /// Determine whether a backup job exists.
         /// </summary>
         /// <param name="id">Job identifier.</param>

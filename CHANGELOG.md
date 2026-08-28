@@ -6,6 +6,40 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-28
+
+### Added
+- **Shared global exclude list.** A machine-wide set of exclude rules — build output,
+  package and tool caches (`node_modules`, `obj`, `.nuget`, `packages`, `.vs`), `AppData`,
+  and other common noise — applied to every policy that opts in, with a per-policy toggle
+  in the policy editor and a `g`-key manager (edit / restore defaults) in the TUI. Seeded
+  with sensible defaults on first run.
+- **Always-visible keyboard shortcut bar.** A persistent one-row footer lists the essential
+  keys and always keeps `F1 Help` in view, so commands like global-exclude management are
+  discoverable instead of hidden behind F1.
+
+### Changed
+- **Manifests are streamed as bounded, encrypted segments.** Instead of serializing a run's
+  entire file list into a single in-memory JSON string and array, a manifest is now written
+  to the target as a small header plus numbered, independently-compressed-and-encrypted
+  segments — and read back the same way, one segment at a time (restore, verify, incremental
+  baseline, retention, and the recovery catalog all stream). Peak memory stays flat
+  regardless of file count, and legacy single-object manifests still read.
+- **Scanning and backing up now overlap.** A run processes files while it is still scanning
+  the source, so work begins as soon as the first batch lands instead of after a full
+  enumeration. A durable scan-complete marker keeps resume correct: a run that crashed
+  mid-scan discards its partial work list and re-scans, while one that finished scanning
+  simply processes the complete list.
+
+### Fixed
+- **Out-of-memory on very large backups.** A backup of millions of files no longer fails at
+  the manifest step with *"Insufficient memory to continue the execution of the program"* on
+  a machine with ample free RAM — the failure was a single serialized manifest object
+  exceeding .NET's ~2 GB object ceiling, now removed by segment streaming.
+- **Directory-name exclude rules now prune reliably**, and a work-list row id can no longer
+  be reused mid-run (the work list uses an autoincrementing id), closing a rare path where an
+  overlapped scan could skip a file.
+
 ### Changed
 - **Password-based encryption keys.** The TUI now provisions each encryption key from a
   user-chosen **password** (no key file). The password is cached on the machine, encrypted

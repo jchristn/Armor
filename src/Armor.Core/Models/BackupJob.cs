@@ -113,6 +113,14 @@ namespace Armor.Core.Models
         public long ChunksReused { get; set; } = 0;
 
         /// <summary>
+        /// Whether the source scan for this run finished and the work list is therefore complete. A run
+        /// processes files while it is still scanning, so a run that crashes mid-scan leaves a partial work
+        /// list; this flag lets a resume tell a complete list (process only) from a partial one (discard and
+        /// re-scan). Default is false.
+        /// </summary>
+        public bool ScanComplete { get; set; } = false;
+
+        /// <summary>
         /// Error message if the run failed, or null on success.
         /// </summary>
         public string? Error { get; set; } = null;

@@ -33,9 +33,11 @@ SHA-256 hash. Every chunk is compressed, then encrypted with AES-256-GCM under a
 random per-repository data key. That data key is wrapped by a key derived from your
 password (PBKDF2-HMAC-SHA256); the password is cached locally, encrypted at rest, so
 scheduled backups run unattended. Per-run manifests map your files to their chunk lists,
-so restoring a point in time reads one manifest and reassembles from the store. Because
-the wrapped key envelope and repository header travel with the data on the target, a fresh
-machine can restore with nothing but the target and your password.
+so restoring a point in time reads that manifest and reassembles from the store. Manifests
+are written and read as bounded, independently-encrypted segments, so a backup of millions
+of files streams to and from the target without ever holding the whole file list in memory.
+Because the wrapped key envelope and repository header travel with the data on the target,
+a fresh machine can restore with nothing but the target and your password.
 
 ## Storage targets
 
@@ -60,8 +62,10 @@ TUI — a dashboard with a nav sidebar ordered as a setup checklist — and work
 2. **Passwords → `c`.** Name an encryption password and choose a password. Armor generates
    a random data key, wraps it with your password, and caches the password locally so
    backups run unattended. The password is the only secret needed to restore — no key file.
-3. **Policies → `c`.** Choose what to include, the backup target, the encryption password,
-   and whether runs are full, incremental, or differential.
+3. **Policies → `c`.** Choose what to include, what to exclude, the backup target, the
+   encryption password, and whether runs are full, incremental, or differential. A shared
+   **global exclude list** — build output, package and tool caches, `AppData`, and the like —
+   keeps the usual noise out of every policy that opts in; manage it any time with **`g`**.
 4. **Policies → Enter.** Run a backup now; a progress bar tracks it and the activity log
    reports how many chunks it wrote versus reused. Each run is a restore point.
 5. **Backup jobs → Enter** (or **r** on a policy). Pick a point-in-time and choose where to

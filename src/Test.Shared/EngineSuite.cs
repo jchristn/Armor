@@ -6,6 +6,7 @@ namespace Test.Shared
     using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
+    using Armor.Core.ChunkStore;
     using Armor.Core.Enums;
     using Armor.Core.Exceptions;
     using Armor.Core.Engine;
@@ -265,6 +266,87 @@ namespace Test.Shared
                             BackupEngine backup = new BackupEngine(fx.Database);
                             BackupJob job = await backup.RunAsync(policy, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
                             Check.Equal(1L, job.FileCount, "only keep.txt survives; every .git file or folder is excluded");
+                        }
+                    }),
+
+                    Case("ManifestStreamsAcrossSegments", "A manifest larger than one segment writes, reads, and deletes segment-by-segment", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            const string jobId = "job_seg_test";
+                            string key = "manifests/pol_test/" + jobId + ".manifest";
+                            ManifestHeader header = new ManifestHeader { JobId = jobId, PolicyId = "pol_test", BackupType = BackupTypeEnum.Full, PointInTimeUtc = DateTime.UtcNow };
+
+                            // Ten entries at three per segment force four segments (3+3+3+1), exercising the
+                            // full-segment flush, the final partial-segment flush, and multi-segment reads.
+                            ManifestStore.Writer writer = new ManifestStore.Writer(fx.Repository, key, fx.DataKey, header, segmentSize: 3);
+                            List<ManifestFileEntry> expected = new List<ManifestFileEntry>();
+                            long expectedBytes = 0;
+                            for (int i = 0; i < 10; i++)
+                            {
+                                ManifestFileEntry e = new ManifestFileEntry { Path = "/data/file" + i + ".bin", SizeBytes = 100 + i, ArchiveBit = i % 2 == 0 };
+                                e.ChunkHashes.Add("hash" + i + "a");
+                                if (i % 2 == 0)
+                                    e.ChunkHashes.Add("hash" + i + "b");
+                                expected.Add(e);
+                                expectedBytes += e.SizeBytes;
+                                await writer.AddAsync(e, ct).ConfigureAwait(false);
+                            }
+                            await writer.CompleteAsync(ct).ConfigureAwait(false);
+                            Check.Equal(10L, writer.FileCount, "writer counts every entry");
+
+                            ManifestHeader read = await ManifestStore.ReadHeaderAsync(fx.Repository, key, jobId, fx.DataKey, ct).ConfigureAwait(false);
+                            Check.Equal(4, read.SegmentCount, "10 entries at 3 per segment produce 4 segments");
+                            Check.Equal(10L, read.FileCount, "header file count round-trips");
+                            Check.Equal(expectedBytes, read.TotalBytes, "header byte total round-trips");
+
+                            List<ManifestFileEntry> got = new List<ManifestFileEntry>();
+                            await foreach (ManifestFileEntry e in ManifestStore.StreamAsync(fx.Repository, key, jobId, fx.DataKey, ct).ConfigureAwait(false))
+                                got.Add(e);
+                            Check.Equal(10, got.Count, "every entry streams back");
+                            for (int i = 0; i < 10; i++)
+                            {
+                                Check.Equal(expected[i].Path, got[i].Path, "path and order round-trip");
+                                Check.Equal(expected[i].SizeBytes, got[i].SizeBytes, "size round-trips");
+                                Check.Equal(expected[i].ChunkHashes.Count, got[i].ChunkHashes.Count, "chunk hashes round-trip");
+                            }
+
+                            // Delete removes the header and every segment object.
+                            await ManifestStore.DeleteAsync(fx.Repository, key, jobId, fx.DataKey, ct).ConfigureAwait(false);
+                            Check.False(await fx.Repository.ObjectExistsAsync(key, ct).ConfigureAwait(false), "header object deleted");
+                            Check.False(await fx.Repository.ObjectExistsAsync(ManifestStore.SegmentKey(key, 0), ct).ConfigureAwait(false), "first segment deleted");
+                            Check.False(await fx.Repository.ObjectExistsAsync(ManifestStore.SegmentKey(key, 3), ct).ConfigureAwait(false), "last segment deleted");
+                        }
+                    }),
+
+                    Case("LegacyWholeManifestReadable", "A format-1 whole manifest still streams and summarizes", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            const string jobId = "job_legacy_test";
+                            string key = "manifests/pol_test/" + jobId + ".manifest";
+
+                            Manifest legacy = new Manifest { JobId = jobId, PolicyId = "pol_test", BackupType = BackupTypeEnum.Full, PointInTimeUtc = DateTime.UtcNow };
+                            for (int i = 0; i < 3; i++)
+                            {
+                                ManifestFileEntry e = new ManifestFileEntry { Path = "/legacy/f" + i, SizeBytes = 10 + i };
+                                e.ChunkHashes.Add("h" + i);
+                                legacy.Files.Add(e);
+                            }
+                            await fx.Repository.WriteObjectAsync(key, ManifestCodec.Encode(legacy, fx.DataKey), ct).ConfigureAwait(false);
+
+                            List<ManifestFileEntry> got = new List<ManifestFileEntry>();
+                            await foreach (ManifestFileEntry e in ManifestStore.StreamAsync(fx.Repository, key, jobId, fx.DataKey, ct).ConfigureAwait(false))
+                                got.Add(e);
+                            Check.Equal(3, got.Count, "legacy whole manifest streams its files");
+                            Check.Equal("/legacy/f0", got[0].Path, "legacy entry order preserved");
+
+                            ManifestHeader header = await ManifestStore.ReadHeaderAsync(fx.Repository, key, jobId, fx.DataKey, ct).ConfigureAwait(false);
+                            Check.Equal(1, header.FormatVersion, "legacy manifest reports format 1");
+                            Check.Equal(3L, header.FileCount, "legacy file count summarized");
+                            Check.Equal(33L, header.TotalBytes, "legacy byte total summarized");
                         }
                     }),
 

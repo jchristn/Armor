@@ -226,6 +226,45 @@ namespace Armor.Core.Database.Sqlite
                 "Shared global exclude list",
                 BuildGlobalExcludeMigration()));
 
+            migrations.Add(new SchemaMigration(
+                7,
+                "Backup-job scan-complete flag",
+                new List<string>
+                {
+                    // Marks whether a run finished scanning its source. A run now processes files while it is
+                    // still scanning, so this flag lets a resume tell a complete work list (process only) from
+                    // a partial one left by a mid-scan crash (discard and re-scan). Existing rows are for
+                    // finished or abandoned runs and adopt the default 0; only live runs set it to 1.
+                    "ALTER TABLE backup_jobs ADD COLUMN scan_complete INTEGER NOT NULL DEFAULT 0;"
+                }));
+
+            migrations.Add(new SchemaMigration(
+                8,
+                "Never-reused work-list rowids",
+                new List<string>
+                {
+                    // Rebuild job_files with an AUTOINCREMENT id. Because a run now scans and processes at the
+                    // same time, the work-list producer pages by id > cursor while the scanner appends new rows.
+                    // A plain INTEGER PRIMARY KEY lets SQLite reuse the id of a deleted max row (rows are deleted
+                    // when a file vanishes between scan and copy); a reused id could land at or below the
+                    // producer's cursor and be skipped, dropping a file from the backup. AUTOINCREMENT never
+                    // reuses an id, so every newly scanned row sorts after the cursor. Any in-flight work list is
+                    // discarded; an interrupted run simply re-scans on its next attempt.
+                    "DROP TABLE IF EXISTS job_files;",
+
+                    "CREATE TABLE job_files (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                    "job_id TEXT NOT NULL, " +
+                    "path TEXT NOT NULL, " +
+                    "size_bytes INTEGER NOT NULL DEFAULT 0, " +
+                    "modified_utc TEXT NOT NULL, " +
+                    "archive_bit INTEGER NOT NULL DEFAULT 0, " +
+                    "done INTEGER NOT NULL DEFAULT 0, " +
+                    "chunk_hashes TEXT NULL);",
+
+                    "CREATE INDEX idx_job_files_job_done ON job_files (job_id, done, id);"
+                }));
+
             return migrations;
         }
 
