@@ -336,7 +336,7 @@ namespace Armor.Tui
                 }, policy));
             }
 
-            Content().SetHeadings("Policies (" + policies.Count + ")", "↑↓/select | Enter/back up now | r/restore | c/create | e/edit | d/delete | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Policies (" + policies.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Back up now"), Hint("r", "Restore"), Hint("c", "Create"), Hint("e", "Edit"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No policies yet. Press 'c' to create one.");
         }
 
@@ -356,7 +356,7 @@ namespace Armor.Tui
                 }, target));
             }
 
-            Content().SetHeadings("Backup targets (" + targets.Count + ")", "↑↓/select | Enter/validate | c/create | e/edit | d/delete | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Backup targets (" + targets.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Validate"), Hint("c", "Create"), Hint("e", "Edit"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No backup targets yet. Press 'c' to add where backups are stored.");
         }
 
@@ -382,7 +382,7 @@ namespace Armor.Tui
                 }, key));
             }
 
-            Content().SetHeadings("Encryption passwords (" + keys.Count + ")", "↑↓/select | Enter/details | c/create | e/rename | d/delete | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Encryption passwords (" + keys.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Details"), Hint("c", "Create"), Hint("e", "Rename"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No encryption passwords yet. Press 'c' to create one.");
         }
 
@@ -408,7 +408,7 @@ namespace Armor.Tui
                 }, job));
             }
 
-            Content().SetHeadings("Backup jobs — restore points (" + jobs.Count + ")", "↑↓/select | Enter/restore | F5/refresh | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Backup jobs — restore points (" + jobs.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Restore"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No backups have run yet. Run a policy from 'Policies' to create a restore point.");
         }
 
@@ -431,7 +431,7 @@ namespace Armor.Tui
                 }, schedule));
             }
 
-            Content().SetHeadings("Schedules (" + schedules.Count + ")", "↑↓/select | Enter/enable-disable | c/create | e/edit | d/delete | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Schedules (" + schedules.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Enable/disable"), Hint("c", "Create"), Hint("e", "Edit"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No schedules yet. Press 'c' to create one.");
         }
 
@@ -481,7 +481,7 @@ namespace Armor.Tui
                 }, schedule));
             }
 
-            Content().SetHeadings("Runs — upcoming & in progress", "↑↓/select | Enter/cancel running | F5/refresh | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Runs — upcoming & in progress", new[] { Hint("↑↓", "Select"), Hint("↵", "Cancel running"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "Nothing running and nothing scheduled. Add a schedule under 'Schedules'.");
         }
 
@@ -539,7 +539,7 @@ namespace Armor.Tui
                 }, target));
             }
 
-            Content().SetHeadings("Recover — choose where the backup is", "↑↓/select | Enter/open | c/add location | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Recover — choose where the backup is", new[] { Hint("↑↓", "Select"), Hint("↵", "Open"), Hint("c", "Add location"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No locations yet. Press 'c' to add where your backup lives.");
         }
 
@@ -705,7 +705,7 @@ namespace Armor.Tui
             }
             rows.Add(new TableRow(new[] { "‹ Back to locations", "", "", "", "" }, RecoverBackRow.Instance));
 
-            Content().SetHeadings("Recover — " + targetName + " (" + points.Count + " backup" + (points.Count == 1 ? "" : "s") + ")", "↑↓/select | Enter/restore | s/stats | Esc/nav | Ctrl+Q/quit");
+            Content().SetHeadings("Recover — " + targetName + " (" + points.Count + " backup" + (points.Count == 1 ? "" : "s") + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Restore"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No backups were found at this location.");
         }
 
@@ -808,6 +808,12 @@ namespace Armor.Tui
                 unit++;
             }
             return unit == 0 ? bytes + " B" : value.ToString("0.0") + " " + units[unit];
+        }
+
+        /// <summary>Shorthand for a keyboard-shortcut hint used in a section heading.</summary>
+        private static KeyHint Hint(string key, string label)
+        {
+            return new KeyHint(key, label);
         }
 
         /// <summary>

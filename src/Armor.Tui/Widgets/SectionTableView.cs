@@ -54,6 +54,7 @@ namespace Armor.Tui.Widgets
         private bool _Focused;
         private string? _Title;
         private string? _Subtitle;
+        private IReadOnlyList<KeyHint>? _Hints;
         private readonly int _PadLeft;
         private readonly int _PadRight;
         private readonly bool _Bordered;
@@ -142,6 +143,20 @@ namespace Armor.Tui.Widgets
         {
             _Title = title;
             _Subtitle = subtitle;
+            _Hints = null;
+        }
+
+        /// <summary>
+        /// Set the title and a row of keyboard-shortcut hints drawn below it, styled the same as the bottom
+        /// shortcut bar (accent-colored key, dimmed label).
+        /// </summary>
+        /// <param name="title">The bold title line, or null.</param>
+        /// <param name="hints">The shortcut hints, or null to omit the row.</param>
+        public void SetHeadings(string? title, IReadOnlyList<KeyHint>? hints)
+        {
+            _Title = title;
+            _Hints = hints;
+            _Subtitle = null;
         }
 
         /// <summary>
@@ -233,7 +248,16 @@ namespace Armor.Tui.Widgets
                 y++;
             }
 
-            if (!String.IsNullOrEmpty(_Subtitle) && y < floor)
+            if (_Hints != null && _Hints.Count > 0 && y < floor)
+            {
+                DrawHints(surface, left, y, usable, _Hints, baseStyle);
+                y++;
+
+                // Blank line separating the key-hint row from the content beneath it.
+                if (y < floor)
+                    y++;
+            }
+            else if (!String.IsNullOrEmpty(_Subtitle) && y < floor)
             {
                 surface.DrawText(left, y, Fit(_Subtitle!, usable), baseStyle.WithForeground(Color.FromPalette(DimColor)));
                 y++;
@@ -346,6 +370,37 @@ namespace Armor.Tui.Widgets
             if (widths[columns - 1] < 1)
                 widths[columns - 1] = 1;
             return widths;
+        }
+
+        // Draw a row of keyboard-shortcut hints — the key in the accent color (bold) and the label dimmed,
+        // separated by two spaces — matching the bottom shortcut bar. Hints that would overflow the width are
+        // dropped rather than truncated.
+        private static void DrawHints(ISurface surface, int startX, int y, int maxWidth, IReadOnlyList<KeyHint> hints, CellStyle baseStyle)
+        {
+            CellStyle keyStyle = baseStyle.WithForeground(Color.FromPalette(HeaderColor)).WithAttribute(CellAttributes.Bold, true);
+            CellStyle labelStyle = baseStyle.WithForeground(Color.FromPalette(DimColor));
+
+            int x = startX;
+            int end = startX + maxWidth;
+            bool first = true;
+            foreach (KeyHint hint in hints)
+            {
+                int separatorWidth = first ? 0 : 2;
+                int needed = separatorWidth + hint.Key.Length + 1 + hint.Label.Length;
+                if (x + needed > end)
+                    break;
+
+                if (!first)
+                {
+                    surface.DrawText(x, y, "  ", labelStyle);
+                    x += 2;
+                }
+                surface.DrawText(x, y, hint.Key, keyStyle);
+                x += hint.Key.Length;
+                surface.DrawText(x, y, " " + hint.Label, labelStyle);
+                x += 1 + hint.Label.Length;
+                first = false;
+            }
         }
 
         private static void DrawCells(ISurface surface, int startX, int y, string[] cells, int[] widths, CellStyle style)
