@@ -104,21 +104,35 @@ namespace Armor.Tui
         private readonly List<JobEntry> _Jobs = new List<JobEntry>();
         private string? _ActivityText;
 
+        // Distinguishes the two kinds of run that share the status workspace and job registry, so cancel
+        // prompts and counters can word themselves correctly.
+        private enum JobKind
+        {
+            Backup,
+            Restore,
+        }
+
         /// <summary>
-        /// A backup running under this TUI process: its display label, cancellation source, and the
-        /// latest progress. All fields are read and written only on the UI thread (via <c>Post</c>), so
+        /// A backup or restore running under this TUI process: its display label, cancellation source, and
+        /// the latest progress. All fields are read and written only on the UI thread (via <c>Post</c>), so
         /// no locking is needed. The <see cref="Id"/> is a process-local handle, distinct from the
         /// database job id, so the status view can address a run before its job row exists.
         /// </summary>
         private sealed class JobEntry
         {
-            public JobEntry(string id, string label, string policyName, CancellationTokenSource cts)
+            public JobEntry(string id, string label, string policyName, CancellationTokenSource cts, JobKind kind = JobKind.Backup)
             {
                 Id = id;
                 Label = label;
                 PolicyName = policyName;
                 Cts = cts;
+                Kind = kind;
+                // A restore knows its totals up front (from the backup record), so it never shows the
+                // backup's "scanning" pre-phase.
+                Scanning = kind == JobKind.Backup;
             }
+
+            public JobKind Kind { get; }
 
             public string Id { get; }
 
@@ -140,8 +154,9 @@ namespace Armor.Tui
 
             public bool Cancelling { get; set; }
 
-            // True while the run is still pre-scanning the source (before any file is copied).
-            public bool Scanning { get; set; } = true;
+            // True while the run is still pre-scanning the source (before any file is copied). Seeded by
+            // the constructor from the job kind: backups begin scanning, restores never scan.
+            public bool Scanning { get; set; }
         }
 
         /// <summary>
@@ -219,7 +234,7 @@ namespace Armor.Tui
                 .Add("log", region => region.Horizontal(fullWidth).Vertical(AxisConstraint.FromEnd(1, LogHeight))
                     .WithBorder(BorderStyle.Line, "Activity log").WithPadding(0).WithHorizontalPadding(1, 1))
                 .Add("status", region => region.Horizontal(fullWidth).Vertical(AxisConstraint.FromEnd(1 + LogHeight, StatusHeight))
-                    .WithBorder(BorderStyle.Line, "Backups in progress").WithPadding(0).WithHorizontalPadding(1, 1))
+                    .WithBorder(BorderStyle.Line, "Backups & restores in progress").WithPadding(0).WithHorizontalPadding(1, 1))
                 .Add("nav", region => region.Horizontal(AxisConstraint.Fixed(0, NavWidth)).Vertical(middleHeight).WithPadding(0))
                 .Add("content", region => region.Horizontal(AxisConstraint.Stretch(NavWidth, 0, 1, FillMax)).Vertical(middleHeight).WithPadding(0))
                 .Build();
@@ -748,28 +763,73 @@ namespace Armor.Tui
             restoreJob.SourceSelector = selector;
             restoreJob.DestinationRoot = destinationRoot;
 
-            _Busy = true;
-            _ActivityText = "Restoring from " + point.PointInTimeUtc.ToString("u");
+            // Register the recover-flow restore in the status workspace with a live progress bar, the same
+            // as a policy restore. Totals come from the recovery point up front, so there is no scan phase.
+            string pointLabel = point.PolicyName ?? point.PolicyId;
+            string jobId = "ui_" + Guid.NewGuid().ToString("N");
+            CancellationTokenSource cts = new CancellationTokenSource();
+            string label = "Restore from " + point.PointInTimeUtc.ToString("u");
+            JobEntry entry = new JobEntry(jobId, label, pointLabel, cts, JobKind.Restore);
+            entry.FilesTotal = point.FileCount > int.MaxValue ? int.MaxValue : (int)point.FileCount;
+            entry.BytesTotal = point.TotalBytes;
+            _Jobs.Add(entry);
+            RefreshJobView();
             SetStatus("Restoring from " + point.PointInTimeUtc.ToString("u") + ".");
+
+            int lastPercent = -1;
+            int lastFilesDone = -1;
+            IProgress<RestoreProgress> progress = new DelegateProgress<RestoreProgress>(p =>
+            {
+                int pct = p.BytesTotal > 0
+                    ? (int)(p.BytesDone * 100 / p.BytesTotal)
+                    : (p.FilesTotal > 0 ? p.FilesDone * 100 / p.FilesTotal : 0);
+                pct = Math.Clamp(pct, 0, 100);
+
+                if (pct == lastPercent && p.FilesDone == lastFilesDone)
+                    return;
+                lastPercent = pct;
+                lastFilesDone = p.FilesDone;
+
+                int filesDone = p.FilesDone;
+                int filesTotal = p.FilesTotal;
+                long bytesDone = p.BytesDone;
+                long bytesTotal = p.BytesTotal;
+                Post(() =>
+                {
+                    entry.Scanning = false;
+                    entry.Percent = pct;
+                    entry.FilesDone = filesDone;
+                    entry.FilesTotal = filesTotal;
+                    entry.BytesDone = bytesDone;
+                    entry.BytesTotal = bytesTotal;
+                    RefreshJobView();
+                });
+            });
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    RestoreJob done = await session.RestoreAsync(point, restoreJob).ConfigureAwait(false);
+                    RestoreJob done = await session.RestoreAsync(point, restoreJob, cts.Token, progress).ConfigureAwait(false);
                     Post(() =>
                     {
-                        _Busy = false;
-                        _ActivityText = null;
+                        FinishJob(entry);
                         SetStatus("Restore " + done.Status + ": " + done.FilesRestored + " files, " + FormatBytes(done.BytesRestored) + ".");
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    Post(() =>
+                    {
+                        FinishJob(entry);
+                        SetStatus("Restore from " + point.PointInTimeUtc.ToString("u") + " canceled.");
                     });
                 }
                 catch (Exception ex)
                 {
                     Post(() =>
                     {
-                        _Busy = false;
-                        _ActivityText = null;
+                        FinishJob(entry);
                         SetStatus("Restore failed: " + ex.Message);
                     });
                 }
@@ -900,9 +960,20 @@ namespace Armor.Tui
             if (browse == null || browse.Includes.Count == 0)
                 return;
 
-            // The browser's own excluded holes plus any extra name/wildcard/regex rules the user adds.
-            List<ExcludePattern>? manual = await EditExcludePatternsAsync(null).ConfigureAwait(false);
-            List<ExcludePattern> excludes = manual ?? new List<ExcludePattern>();
+            // Seed the exclude editor with the shared global list so a new policy shows — and lets the user
+            // trim — the default excludes (.git, bin, obj, node_modules, …) instead of an empty list. The
+            // seeded rules become the policy's own, and the policy opts out of the global list below so the
+            // visible rules are exactly what is applied: removing a shown rule actually un-excludes it,
+            // rather than leaving a hidden global layer to re-apply it.
+            List<ExcludePattern> globalSeed = await _Context.Database.GlobalExcludes.ReadAllAsync().ConfigureAwait(false);
+            if (globalSeed.Count == 0)
+                globalSeed = GlobalExcludeDefaults.Create();
+
+            // The seeded global defaults, any extra name/wildcard/regex rules the user adds, plus the
+            // browser's own excluded holes. A cancelled editor keeps the seeded defaults rather than
+            // dropping them.
+            List<ExcludePattern>? manual = await EditExcludePatternsAsync(globalSeed).ConfigureAwait(false);
+            List<ExcludePattern> excludes = manual ?? globalSeed;
             excludes.AddRange(EncodeUiExcludes(browse.Excludes));
 
             StorageTarget? target = await PickAsync("Where should backups be stored?", targets, t => t.Name + " [" + t.Type + "]").ConfigureAwait(false);
@@ -922,6 +993,11 @@ namespace Armor.Tui
             foreach (string includePath in browse.Includes)
                 policy.IncludePaths.Add(includePath);
             policy.ExcludePatterns = excludes;
+
+            // The global defaults are now materialized as this policy's own (visible, editable) rules, so
+            // opt out of the shared global list to avoid applying them twice and to keep the editor's rules
+            // authoritative.
+            policy.UseGlobalExcludes = false;
             policy.StorageTargetId = target.Id;
             policy.EncryptionKeyId = key.Id;
             policy.BackupType = typeIndex == 1 ? BackupTypeEnum.Incremental : (typeIndex == 2 ? BackupTypeEnum.Differential : BackupTypeEnum.Full);
@@ -1960,7 +2036,7 @@ namespace Armor.Tui
             // lock enforces this across processes; here we give a friendlier answer before starting).
             foreach (JobEntry active in _Jobs)
             {
-                if (String.Equals(active.PolicyName, policy.Name, StringComparison.Ordinal))
+                if (active.Kind == JobKind.Backup && String.Equals(active.PolicyName, policy.Name, StringComparison.Ordinal))
                 {
                     await NotifyAsync("Already running", "A backup of '" + policy.Name + "' is already in progress.").ConfigureAwait(false);
                     return;
@@ -2126,15 +2202,21 @@ namespace Armor.Tui
             if (entry == null)
                 return;
 
+            bool isRestore = entry.Kind == JobKind.Restore;
+            string noun = isRestore ? "restore" : "backup";
+
             if (entry.Cancelling)
             {
-                await NotifyAsync("Canceling", "'" + entry.PolicyName + "' is already being canceled.").ConfigureAwait(false);
+                await NotifyAsync("Canceling", "The " + noun + " of '" + entry.PolicyName + "' is already being canceled.").ConfigureAwait(false);
                 return;
             }
 
+            string question = isRestore
+                ? "Cancel the restore of '" + entry.PolicyName + "'? Files already written to the destination are left in place."
+                : "Cancel the backup of '" + entry.PolicyName + "'? Work done so far is discarded; the previous restore point is unaffected.";
             bool cancel = await ConfirmAsync(
-                "Cancel the backup of '" + entry.PolicyName + "'? Work done so far is discarded; the previous restore point is unaffected.",
-                "Cancel backup",
+                question,
+                "Cancel " + noun,
                 "Leave it running").ConfigureAwait(false);
             if (!cancel)
                 return;
@@ -2145,7 +2227,7 @@ namespace Armor.Tui
 
             entry.Cancelling = true;
             RefreshJobView();
-            SetStatus("Canceling backup of '" + entry.PolicyName + "'.");
+            SetStatus("Canceling " + noun + " of '" + entry.PolicyName + "'.");
             entry.Cts.Cancel();
         }
 
@@ -2216,30 +2298,78 @@ namespace Armor.Tui
             restoreJob.Scope = RestoreScopeEnum.All;
             restoreJob.DestinationRoot = destinationRoot;
 
-            _Busy = true;
-            _ActivityText = "Restoring '" + policy.Name + "'";
-            SetStatus("Restoring.");
+            // Register the restore in the shared job registry so the status workspace shows a live progress
+            // bar and offers to cancel it, exactly as a backup does. A restore's totals are known up front
+            // from the backup point-in-time, so the entry starts with its totals set and no scan phase.
+            string jobId = "ui_" + Guid.NewGuid().ToString("N");
+            CancellationTokenSource cts = new CancellationTokenSource();
+            string label = "Restore of '" + policy.Name + "'";
+            JobEntry entry = new JobEntry(jobId, label, policy.Name, cts, JobKind.Restore);
+            entry.FilesTotal = job.FileCount > int.MaxValue ? int.MaxValue : (int)job.FileCount;
+            entry.BytesTotal = job.BytesTotal;
+            _Jobs.Add(entry);
+            RefreshJobView();
+            SetStatus("Restoring '" + policy.Name + "'.");
+
+            // Report progress into the job entry, updating whenever the percentage or the file count moves
+            // so the bar and counts advance without flooding the UI (each file is real I/O).
+            int lastPercent = -1;
+            int lastFilesDone = -1;
+            string policyName = policy.Name;
+            IProgress<RestoreProgress> progress = new DelegateProgress<RestoreProgress>(p =>
+            {
+                int pct = p.BytesTotal > 0
+                    ? (int)(p.BytesDone * 100 / p.BytesTotal)
+                    : (p.FilesTotal > 0 ? p.FilesDone * 100 / p.FilesTotal : 0);
+                pct = Math.Clamp(pct, 0, 100);
+
+                if (pct == lastPercent && p.FilesDone == lastFilesDone)
+                    return;
+                lastPercent = pct;
+                lastFilesDone = p.FilesDone;
+
+                int filesDone = p.FilesDone;
+                int filesTotal = p.FilesTotal;
+                long bytesDone = p.BytesDone;
+                long bytesTotal = p.BytesTotal;
+                Post(() =>
+                {
+                    entry.Scanning = false;
+                    entry.Percent = pct;
+                    entry.FilesDone = filesDone;
+                    entry.FilesTotal = filesTotal;
+                    entry.BytesDone = bytesDone;
+                    entry.BytesTotal = bytesTotal;
+                    RefreshJobView();
+                });
+            });
 
             _ = Task.Run(async () =>
             {
                 try
                 {
                     RestoreService service = new RestoreService(_Context);
-                    RestoreJob done = await service.RunAsync(restoreJob, dataKey).ConfigureAwait(false);
+                    RestoreJob done = await service.RunAsync(restoreJob, dataKey, cts.Token, progress).ConfigureAwait(false);
                     Post(() =>
                     {
-                        _Busy = false;
-                        _ActivityText = null;
+                        FinishJob(entry);
                         SetStatus("Restore " + done.Status + ": " + done.FilesRestored + " files, " + FormatBytes(done.BytesRestored) + ".");
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    Post(() =>
+                    {
+                        FinishJob(entry);
+                        SetStatus("Restore of '" + policyName + "' canceled.");
                     });
                 }
                 catch (Exception ex)
                 {
                     Post(() =>
                     {
-                        _Busy = false;
-                        _ActivityText = null;
-                        SetStatus("Restore failed: " + ex.Message);
+                        FinishJob(entry);
+                        SetStatus("Restore of '" + policyName + "' failed: " + ex.Message);
                     });
                 }
             });
@@ -2836,7 +2966,14 @@ namespace Armor.Tui
             // Runs left in "Running" that are not actually live this session were interrupted (crashed or
             // the process was killed) and count as failures. A genuinely in-progress run is excluded from
             // the rate because it has neither succeeded nor failed yet.
-            int liveRunning = _Jobs.Count;
+            // Count only live backups here: `running` is the number of backup runs the database still has
+            // in "Running", so a concurrently live restore must not be subtracted from it.
+            int liveRunning = 0;
+            foreach (JobEntry active in _Jobs)
+            {
+                if (active.Kind == JobKind.Backup)
+                    liveRunning++;
+            }
             int incomplete = Math.Max(0, running - liveRunning);
             int decided = completed + failed + canceled + incomplete;
             double successRate = decided > 0 ? 100.0 * completed / decided : 0;

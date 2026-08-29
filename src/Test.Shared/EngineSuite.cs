@@ -177,6 +177,49 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("RestoreReportsProgress", "Restore reports progress with up-front totals and a full finish", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            string source = Path.Combine(ws.RootDirectory, "source");
+                            WriteFile(source, "a.txt", Content(70, 2000));
+                            WriteFile(source, "b.txt", Content(71, 3000));
+                            WriteFile(source, "sub/c.txt", Content(72, 4000));
+
+                            Policy policy = NewPolicy(source);
+                            BackupEngine backup = new BackupEngine(fx.Database);
+                            BackupJob job = await backup.RunAsync(policy, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
+
+                            string restore = Path.Combine(ws.RootDirectory, "restore");
+                            RestoreJob rj = new RestoreJob();
+                            rj.BackupJobId = job.Id;
+                            rj.Scope = RestoreScopeEnum.All;
+                            rj.DestinationRoot = restore;
+
+                            ProgressCollector<RestoreProgress> collector = new ProgressCollector<RestoreProgress>();
+                            RestoreEngine engine = new RestoreEngine(fx.Database);
+                            RestoreJob done = await engine.RunAsync(rj, job, fx.Repository, fx.DataKey, ct, collector).ConfigureAwait(false);
+
+                            Check.Equal(3L, done.FilesRestored, "all three files restored");
+                            Check.True(collector.Reports.Count >= 4, "an initial report plus one per file");
+
+                            // The first report carries the final totals up front (no scan phase) with nothing done yet.
+                            RestoreProgress first = collector.Reports[0];
+                            Check.Equal((int)job.FileCount, first.FilesTotal, "initial report totals match the backup file count");
+                            Check.Equal(job.BytesTotal, first.BytesTotal, "initial report byte total matches the backup");
+                            Check.Equal(0, first.FilesDone, "initial report has nothing done");
+                            Check.Equal(0L, first.BytesDone, "initial report has no bytes done");
+
+                            // The final report is a full finish: totals held constant and everything done.
+                            RestoreProgress last = collector.Reports[collector.Reports.Count - 1];
+                            Check.Equal((int)job.FileCount, last.FilesDone, "final report has every file done");
+                            Check.Equal(job.BytesTotal, last.BytesDone, "final report has every byte done");
+                            Check.Equal(first.FilesTotal, last.FilesTotal, "file total is fixed across the run");
+                            Check.Equal(first.BytesTotal, last.BytesTotal, "byte total is fixed across the run");
+                        }
+                    }),
+
                     Case("VerifySucceedsThenFailsOnCorruption", "Verify passes, then fails on a corrupted chunk", async ct =>
                     {
                         using (TempWorkspace ws = new TempWorkspace())
@@ -464,6 +507,18 @@ namespace Test.Shared
         private static TestCaseDescriptor Case(string caseId, string displayName, Func<CancellationToken, Task> body)
         {
             return new TestCaseDescriptor(suiteId: "Engine", caseId: caseId, displayName: displayName, executeAsync: body);
+        }
+
+        // The restore engine reports progress synchronously on the calling thread, so a plain synchronous
+        // collector captures every report in order without any scheduling races.
+        private sealed class ProgressCollector<T> : IProgress<T>
+        {
+            public List<T> Reports { get; } = new List<T>();
+
+            public void Report(T value)
+            {
+                Reports.Add(value);
+            }
         }
 
         private static Policy NewPolicy(string sourceDirectory)

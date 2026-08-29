@@ -32,10 +32,11 @@ namespace Armor.Core.Service
         /// <param name="restoreJob">The restore job describing scope and destination. Cannot be null.</param>
         /// <param name="dataKey">The unlocked 32-byte data key. Cannot be null.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="progress">Optional observer notified as files are written.</param>
         /// <returns>The completed restore-job record.</returns>
         /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
         /// <exception cref="ArmorException">Thrown when the backup job, policy, or target is missing.</exception>
-        public async Task<RestoreJob> RunAsync(RestoreJob restoreJob, byte[] dataKey, CancellationToken token = default)
+        public async Task<RestoreJob> RunAsync(RestoreJob restoreJob, byte[] dataKey, CancellationToken token = default, IProgress<RestoreProgress>? progress = null)
         {
             if (restoreJob == null)
                 throw new ArgumentNullException(nameof(restoreJob));
@@ -46,7 +47,7 @@ namespace Armor.Core.Service
             IStorageRepository repository = await ResolveRepositoryAsync(backupJob, token).ConfigureAwait(false);
 
             RestoreEngine engine = new RestoreEngine(_Context.Database);
-            return await engine.RunAsync(restoreJob, backupJob, repository, dataKey, token).ConfigureAwait(false);
+            return await engine.RunAsync(restoreJob, backupJob, repository, dataKey, token, progress).ConfigureAwait(false);
         }
 
         /// <summary>

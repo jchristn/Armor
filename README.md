@@ -71,13 +71,16 @@ lists every key.
    restore — no key file.
 3. **Policies** — press <kbd>c</kbd> to create one. Choose what to include, what to exclude, the
    backup target, the encryption password, and whether runs are full, incremental, or
-   differential. A shared **global exclude list** — build output, package and tool caches,
-   `AppData`, and the like — keeps the usual noise out of every policy that opts in; press
-   <kbd>g</kbd> any time to manage it.
+   differential. The exclude step is **pre-filled with the shared global exclude list** — build
+   output, package and tool caches, `AppData`, and the like — so a new policy starts with the
+   usual noise already excluded and you can see and trim exactly what it skips; press <kbd>g</kbd>
+   any time to manage the shared list itself.
 4. **Policies** — press <kbd>Enter</kbd> to run a backup now; a progress bar tracks it and the
    activity log reports how many chunks it wrote versus reused. Each run is a restore point.
 5. **Backup jobs** — press <kbd>Enter</kbd> (or <kbd>r</kbd> on a policy) to pick a point-in-time
-   and choose where to write. Restoring to a blank destination rebuilds the original tree there.
+   and choose where to write. Restoring to a blank destination rebuilds the original tree there;
+   the restore shows a live progress bar in the "Backups & restores in progress" window, the same
+   as a backup does.
 
 For unattended, scheduled backups, create a schedule (on **Schedules**, press <kbd>c</kbd> for a
 plain-English frequency form). The agent (`Armor.Agent`) owns the tray icon and runs due
@@ -94,10 +97,11 @@ gap at the worst possible moment:
 
 1. **Review the exclude lists before your first run.** Armor ships a shared **global exclude
    list** — build output, package and tool caches, `AppData`, OS-generated metadata (`.DS_Store`,
-   `Thumbs.db`, `lost+found`, and the like) — that every policy uses unless you turn it off
-   (press <kbd>g</kbd> to see and edit it). Each policy can also carry its own excludes. These
-   defaults are deliberately conservative, but only you know your data: skim the global list and
-   your policy's excludes and make sure nothing you care about matches.
+   `Thumbs.db`, `lost+found`, and the like) — managed centrally (press <kbd>g</kbd> to see and
+   edit it). When you create a policy, that list is copied into the policy's own excludes so you
+   can see and adjust exactly what it skips, right there in the create flow. These defaults are
+   deliberately conservative, but only you know your data: skim your policy's excludes and make
+   sure nothing you care about matches.
    [`RECOMMENDED_GLOBAL_EXCLUDES.md`](RECOMMENDED_GLOBAL_EXCLUDES.md) lists, by operating system,
    what the global list excludes today and additional rules worth considering.
 

@@ -41,6 +41,8 @@ namespace Armor.Core.Engine
         /// <param name="repository">The storage repository for the target. Cannot be null.</param>
         /// <param name="dataKey">The 32-byte repository data key. Cannot be null.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="progress">Optional observer notified as files are written. Totals are fixed from
+        /// the backup point-in-time's record, so the first report already carries the final totals.</param>
         /// <returns>The completed restore-job record.</returns>
         /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
         /// <exception cref="ArmorException">Thrown when the backup job has no manifest.</exception>
@@ -49,7 +51,8 @@ namespace Armor.Core.Engine
             BackupJob backupJob,
             IStorageRepository repository,
             byte[] dataKey,
-            CancellationToken token = default)
+            CancellationToken token = default,
+            IProgress<RestoreProgress>? progress = null)
         {
             if (restoreJob == null)
                 throw new ArgumentNullException(nameof(restoreJob));
@@ -70,6 +73,14 @@ namespace Armor.Core.Engine
             {
                 string? normalizedSelector = String.IsNullOrEmpty(restoreJob.SourceSelector) ? null : Normalize(restoreJob.SourceSelector);
 
+                // Totals come from the backup point-in-time's record, so an observer can render a real
+                // completion fraction from the first file (a whole-backup restore hits 100%; a scoped
+                // restore reports against the full manifest, so it simply stops short of 100%). Emit an
+                // initial zero-progress report up front so the UI shows the bar and totals immediately.
+                int filesTotal = backupJob.FileCount > int.MaxValue ? int.MaxValue : (int)backupJob.FileCount;
+                long bytesTotal = backupJob.BytesTotal;
+                progress?.Report(new RestoreProgress { FilesTotal = filesTotal, BytesTotal = bytesTotal, FilesDone = 0, BytesDone = 0 });
+
                 // Stream the manifest one segment at a time and restore each in-scope file as it arrives, so a
                 // restore never materializes the whole file list in memory.
                 await foreach (ManifestFileEntry entry in ManifestStore.StreamAsync(repository, backupJob.ManifestKey!, backupJob.Id, dataKey, token).ConfigureAwait(false))
@@ -81,6 +92,14 @@ namespace Armor.Core.Engine
                     await RestoreFileAsync(entry, destination, repository, dataKey, token).ConfigureAwait(false);
                     restoreJob.FilesRestored += 1;
                     restoreJob.BytesRestored += entry.SizeBytes;
+                    progress?.Report(new RestoreProgress
+                    {
+                        FilesTotal = filesTotal,
+                        BytesTotal = bytesTotal,
+                        FilesDone = restoreJob.FilesRestored > int.MaxValue ? int.MaxValue : (int)restoreJob.FilesRestored,
+                        BytesDone = restoreJob.BytesRestored,
+                        CurrentPath = entry.Path,
+                    });
                 }
 
                 restoreJob.Status = JobStatusEnum.Completed;

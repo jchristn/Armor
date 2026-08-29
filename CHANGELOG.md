@@ -6,6 +6,33 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-29
+
+Exclude visibility, restore progress, and a paste fix in the TUI.
+
+### Added
+- **Live progress for restores.** A restore now appears in the status workspace with the same
+  live progress bar as a backup — file and byte counts and a percentage — and can be selected and
+  canceled there. Both restore entry points are covered: restoring a policy's point-in-time and
+  the **Recover** flow that browses a target directly. The engine reports progress against the
+  backup point-in-time's own totals, so the bar is accurate from the first file (no pre-scan). The
+  status region is renamed **"Backups & restores in progress"** to match.
+
+### Changed
+- **New policies pre-fill the global excludes.** Creating a policy now seeds its exclude editor
+  with the shared global exclude list (build output, package/tool caches, `AppData`, OS metadata,
+  …) instead of showing an empty list, so you can see and trim exactly what the policy will skip.
+  The seeded rules become the policy's own, and the policy opts out of the shared list, so the
+  editor's rules are authoritative — removing a shown rule actually un-excludes it rather than
+  leaving a hidden global layer to re-apply it. The shared list and its <kbd>g</kbd> manager are
+  unchanged for existing policies and the per-policy toggle.
+
+### Fixed
+- **Pasting into TUI prompts works.** Access keys, secret keys, passwords, and other values can
+  now be pasted (Ctrl/Cmd+V) into the terminal prompts — for example when adding an S3 backup
+  target. A bracketed paste was previously decoded but dropped before it reached the focused
+  field. Fixed upstream by upgrading the TUIKit terminal-UI library to `0.9.0`.
+
 ## [0.2.0] - 2026-08-28
 
 ### Added

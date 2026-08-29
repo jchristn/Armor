@@ -159,7 +159,7 @@ namespace Armor.Tui.Widgets
 
             if (_Jobs.Count == 0)
             {
-                surface.DrawText(1, 0, Clip("No active backups.", width - 1), baseStyle.WithForeground(Color.FromPalette(DimColor)));
+                surface.DrawText(1, 0, Clip("No active jobs.", width - 1), baseStyle.WithForeground(Color.FromPalette(DimColor)));
                 return;
             }
 
@@ -169,8 +169,8 @@ namespace Armor.Tui.Widgets
 
             // Header: count, position within the list, and (when focused) the navigation hint.
             string header = _Jobs.Count == 1
-                ? "Active backup"
-                : "Active backups (" + _Jobs.Count + ")   [" + (_Selected + 1) + "/" + _Jobs.Count + "]";
+                ? "Active job"
+                : "Active jobs (" + _Jobs.Count + ")   [" + (_Selected + 1) + "/" + _Jobs.Count + "]";
             CellStyle headerStyle = baseStyle.WithForeground(Color.FromPalette(_Focused ? TitleColor : DimColor));
             if (_Focused)
                 headerStyle = headerStyle.WithAttribute(CellAttributes.Bold, true);

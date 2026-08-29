@@ -192,9 +192,10 @@ namespace Armor.Core.Service
         /// <param name="point">The point-in-time to restore. Cannot be null.</param>
         /// <param name="restoreJob">The restore job describing scope and destination. Cannot be null.</param>
         /// <param name="token">Cancellation token.</param>
+        /// <param name="progress">Optional observer notified as files are written.</param>
         /// <returns>The completed restore-job record.</returns>
         /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
-        public Task<RestoreJob> RestoreAsync(RecoveryPoint point, RestoreJob restoreJob, CancellationToken token = default)
+        public Task<RestoreJob> RestoreAsync(RecoveryPoint point, RestoreJob restoreJob, CancellationToken token = default, IProgress<RestoreProgress>? progress = null)
         {
             if (point == null)
                 throw new ArgumentNullException(nameof(point));
@@ -205,10 +206,14 @@ namespace Armor.Core.Service
             synthetic.Id = point.JobId;
             synthetic.PolicyId = point.PolicyId;
             synthetic.ManifestKey = point.ManifestKey;
+            // Carry the point's totals onto the synthetic job so a progress observer gets real denominators
+            // (the engine reads FileCount/BytesTotal from this record).
+            synthetic.FileCount = point.FileCount;
+            synthetic.BytesTotal = point.TotalBytes;
             restoreJob.BackupJobId = point.JobId;
 
             RestoreEngine engine = new RestoreEngine(_Database);
-            return engine.RunAsync(restoreJob, synthetic, _Repository, _DataKey, token);
+            return engine.RunAsync(restoreJob, synthetic, _Repository, _DataKey, token, progress);
         }
 
 
