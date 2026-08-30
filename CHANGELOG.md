@@ -14,6 +14,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   single native desktop notification across operating systems — a Windows tray balloon, a macOS
   notification, or Linux `notify-send`. Each run produces one announcement in one place: a modal for
   interactive runs, a desktop notification for scheduled ones.
+- **The activity log is now focusable.** Press <kbd>Tab</kbd> to move focus into the **Activity log**:
+  <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>PgUp</kbd>/<kbd>PgDn</kbd> scroll (new lines auto-follow only while
+  you are at the bottom), <kbd>Home</kbd>/<kbd>End</kbd> jump to the oldest/newest line, <kbd>c</kbd>
+  copies the whole log to the system clipboard, and <kbd>x</kbd> (or <kbd>Delete</kbd>) clears it. The
+  log is still mirrored to `~/.armor/logs/armor.log.<date>` on disk.
+
+### Changed
+- **A scheduled backup to an offline removable drive no longer counts as a failure.** When a scheduled
+  policy targets a USB/removable disk that is not currently connected, the scheduler now skips it and
+  leaves the schedule due — it runs automatically once the drive is reconnected — instead of recording
+  a failure (and, since completion notifications landed, popping a "backup failed" toast) on every
+  tick. Other schedules on the same tick, such as a policy backing up to S3, are unaffected. A backup
+  run only ever touches its own linked target; an unrelated offline device can no longer make it look
+  like a reachable backup was blocked.
 
 ## [0.3.0] - 2026-08-29
 

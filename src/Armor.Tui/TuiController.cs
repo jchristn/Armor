@@ -94,7 +94,7 @@ namespace Armor.Tui
         private readonly bool _ShowSplash;
 
         private TuiApplication? _App;
-        private Pane? _Log;
+        private ActivityLogView? _Log;
         private SectionTableView? _Nav;
         private SectionTableView? _Content;
         private Section _Current = Section.Targets;
@@ -209,7 +209,8 @@ namespace Armor.Tui
             _Nav = new SectionTableView(Array.Empty<string>(), new int[] { 1 }, false);
             // A small left inset separates the workspace from the nav sidebar on its left.
             _Content = new SectionTableView(new[] { "Name" }, new int[] { 1 }, true, padLeft: 2);
-            _Log = new Pane("log");
+            _Log = new ActivityLogView();
+            _Log.Announce += text => Post(() => SetStatus(text));
             _JobView = new JobStatusView();
 
             // A persistent one-row key-hint bar pinned to the very bottom, so the essential shortcuts —
@@ -246,7 +247,9 @@ namespace Armor.Tui
             // Bind the status workspace as a focusable widget (not a plain pane) so Tab reaches it and
             // the user can step through and manage in-progress backups.
             app.Bind("status", _JobView);
-            app.BindPane("log", _Log);
+            // Bind the activity log as a focusable widget (not a plain pane) so Tab reaches it and its
+            // scroll/copy/clear shortcuts become available.
+            app.Bind("log", _Log);
 
             // Mirror file-log messages (backup lifecycle, warnings, errors) into the on-screen log pane.
             Armor.Core.Diagnostics.ArmorLog.MessageLogged += OnLogMessage;
@@ -2438,7 +2441,7 @@ namespace Armor.Tui
             string[] lines =
             {
                 HelpRow("↑/↓", "Move selection"),
-                HelpRow("TAB/ESC", "Move focus across the nav, workspace, and status area"),
+                HelpRow("TAB/ESC", "Move focus across the nav, workspace, status area, and activity log"),
                 HelpRow("ENTER", "Run the section action (back up / validate / restore / toggle)"),
                 HelpRow("c/INS", "Create a new item"),
                 HelpRow("e/F2", "Edit the selected policy, target, schedule, or password"),
@@ -2451,6 +2454,7 @@ namespace Armor.Tui
                 HelpRow("", ""),
                 HelpRow("Cancel a run", "In 'Runs' press ENTER on it, or TAB to the status area"),
                 HelpRow("Status area", "TAB to it, ↑/↓ to pick a running backup, ENTER to cancel it"),
+                HelpRow("Activity log", "TAB to it; ↑/↓ PgUp/PgDn scroll; c copy all; x clear"),
                 HelpRow("", ""),
                 HelpRow("F1", "Show this help"),
                 HelpRow("CTRL+Q", "Quit"),

@@ -31,6 +31,7 @@ namespace Armor.Tui.Widgets
             _Hints = new List<(string, string)>
             {
                 ("↑↓", "Move"),
+                ("Tab", "Focus"),
                 ("↵", "Run"),
                 ("c", "New"),
                 ("e", "Edit"),
