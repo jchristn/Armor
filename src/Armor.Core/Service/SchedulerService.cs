@@ -4,6 +4,7 @@ namespace Armor.Core.Service
     using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
+    using Armor.Core.Exceptions;
     using Armor.Core.Models;
     using Armor.Core.Scheduling;
 
@@ -86,6 +87,16 @@ namespace Armor.Core.Service
                 catch (OperationCanceledException)
                 {
                     throw;
+                }
+                catch (TargetUnreachableException)
+                {
+                    // The target is temporarily unavailable — most often a removable/USB drive that is not
+                    // connected right now. This is not a failure: leave the schedule due (do not MarkRan) and
+                    // do not report an error, so no failure is recorded and no notification fires every tick.
+                    // The backup runs on the next tick after the drive is reconnected. Other schedules whose
+                    // targets are reachable — an S3 policy, say — are unaffected.
+                    Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': its target is not reachable yet. Will retry.");
+                    continue;
                 }
                 catch (Exception ex)
                 {

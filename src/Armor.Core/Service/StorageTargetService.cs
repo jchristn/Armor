@@ -121,11 +121,11 @@ namespace Armor.Core.Service
             }
             catch (DirectoryNotFoundException)
             {
-                throw new ArmorException("Backup target '" + target.Name + "' is not reachable. If it is a removable drive, make sure it is connected.");
+                throw new TargetUnreachableException("Backup target '" + target.Name + "' is not reachable. If it is a removable drive, make sure it is connected.");
             }
             catch (IOException ex)
             {
-                throw new ArmorException("Backup target '" + target.Name + "' is not reachable: " + ex.Message);
+                throw new TargetUnreachableException("Backup target '" + target.Name + "' is not reachable: " + ex.Message);
             }
         }
 
@@ -156,7 +156,7 @@ namespace Armor.Core.Service
                 // On a Unix root ("/") this is always ready, so it is a no-op there.
                 DriveInfo drive = new DriveInfo(root);
                 if (!drive.IsReady)
-                    throw new ArmorException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not connected or not ready.");
+                    throw new TargetUnreachableException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not connected or not ready.");
             }
             catch (ArgumentException)
             {
@@ -164,7 +164,7 @@ namespace Armor.Core.Service
             }
             catch (IOException)
             {
-                throw new ArmorException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not ready.");
+                throw new TargetUnreachableException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not ready.");
             }
         }
 

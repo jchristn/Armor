@@ -677,6 +677,80 @@ namespace Test.Shared
                             List<BackupJob> goodJobs = await context.Database.BackupJobs.ReadByPolicyAsync(goodPolicy.Id, ct).ConfigureAwait(false);
                             Check.True(goodJobs.Count >= 1 && goodJobs[goodJobs.Count - 1].Status == JobStatusEnum.Completed, "the healthy policy produced a completed backup");
                         }
+                    }),
+
+                    Case("SchedulerSkipsUnreachableRemovableTarget", "An offline removable target is skipped (not failed) and left due, while other schedules run", async ct =>
+                    {
+                        // A removable/USB target that is not connected must not be recorded as a failure on
+                        // every tick, and must not block a reachable target's schedule (for example an S3
+                        // policy). The absent volume is a Windows drive-letter concept, so this is asserted
+                        // there; on other platforms a drive letter has no root to probe and the case is a no-op.
+                        if (!OperatingSystem.IsWindows())
+                            return;
+
+                        HashSet<char> mounted = new HashSet<char>();
+                        foreach (DriveInfo d in DriveInfo.GetDrives())
+                            if (d.Name.Length > 0)
+                                mounted.Add(Char.ToUpperInvariant(d.Name[0]));
+                        char? spare = null;
+                        for (char c = 'Z'; c >= 'E'; c--)
+                        {
+                            if (!mounted.Contains(c)) { spare = c; break; }
+                        }
+                        if (spare == null)
+                            return; // No unmounted drive letter available to stand in for an unplugged drive.
+
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (ArmorContext context = await ArmorContext.CreateAsync(new ArmorPaths(ws.Combine("home")), ct).ConfigureAwait(false))
+                        {
+                            SmallChunking(context);
+                            EncryptionKeyService keyService = new EncryptionKeyService(context.Database);
+                            ProvisionedKey provisioned = await keyService.ProvisionAsync("sch-key", "pw", null, 50000, ct).ConfigureAwait(false);
+                            StorageTargetService targetService = new StorageTargetService(context.Database, context.CredentialProtector);
+
+                            // Offline removable target: its drive letter is not mounted.
+                            StorageTarget offline = new StorageTarget { Name = "usb", Type = StorageTargetTypeEnum.Disk, DiskPath = spare.Value + ":\\Armor" };
+                            await targetService.CreateAsync(offline, ct).ConfigureAwait(false);
+                            string offlineSrc = ws.Combine("usb-src");
+                            WriteFile(offlineSrc, "a.txt", Content(11, 4000));
+                            Policy offlinePolicy = new Policy { Name = "usb-policy" };
+                            offlinePolicy.IncludePaths.Add(offlineSrc);
+                            offlinePolicy.StorageTargetId = offline.Id;
+                            offlinePolicy.EncryptionKeyId = provisioned.Key.Id;
+                            await context.Database.Policies.CreateAsync(offlinePolicy, ct).ConfigureAwait(false);
+
+                            // A reachable target that must still run.
+                            StorageTarget good = new StorageTarget { Name = "good", Type = StorageTargetTypeEnum.Disk, DiskPath = ws.Combine("good-repo") };
+                            await targetService.CreateAsync(good, ct).ConfigureAwait(false);
+                            string goodSrc = ws.Combine("good-src");
+                            WriteFile(goodSrc, "b.txt", Content(12, 4000));
+                            Policy goodPolicy = new Policy { Name = "good-policy" };
+                            goodPolicy.IncludePaths.Add(goodSrc);
+                            goodPolicy.StorageTargetId = good.Id;
+                            goodPolicy.EncryptionKeyId = provisioned.Key.Id;
+                            await context.Database.Policies.CreateAsync(goodPolicy, ct).ConfigureAwait(false);
+
+                            DateTime due = DateTime.UtcNow.AddMinutes(-1);
+                            Schedule offlineSchedule = new Schedule { PolicyId = offlinePolicy.Id, CronExpression = "*/5 * * * *", NextRunUtc = due };
+                            await context.Database.Schedules.CreateAsync(offlineSchedule, ct).ConfigureAwait(false);
+                            Schedule goodSchedule = new Schedule { PolicyId = goodPolicy.Id, CronExpression = "*/5 * * * *", NextRunUtc = due };
+                            await context.Database.Schedules.CreateAsync(goodSchedule, ct).ConfigureAwait(false);
+
+                            int errors = 0;
+                            SchedulerService scheduler = new SchedulerService(context);
+                            int ran = await scheduler.TickAsync(_ => Task.FromResult<byte[]?>(provisioned.DataKey), DateTime.UtcNow, ct, (_, __) => errors++).ConfigureAwait(false);
+
+                            Check.Equal(1, ran, "the reachable schedule ran despite the offline one");
+                            Check.Equal(0, errors, "the offline removable target reported no failure");
+
+                            // The offline schedule was left due (not advanced), so it retries once the drive returns.
+                            Schedule reloaded = (await context.Database.Schedules.ReadAsync(offlineSchedule.Id, ct).ConfigureAwait(false))!;
+                            Check.True(reloaded.NextRunUtc.HasValue && reloaded.NextRunUtc.Value <= DateTime.UtcNow, "the offline schedule remained due");
+
+                            // No job row was created at all — not even a failed one — for the offline target.
+                            List<BackupJob> offlineJobs = await context.Database.BackupJobs.ReadByPolicyAsync(offlinePolicy.Id, ct).ConfigureAwait(false);
+                            Check.Equal(0, offlineJobs.Count, "no job row was created for the offline target");
+                        }
                     })
                 });
         }
