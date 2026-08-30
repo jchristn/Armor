@@ -108,6 +108,11 @@ namespace Armor.Tui
         // scheduler-started run is visible in the in-progress workspace instead of silently holding the
         // run lock. Refreshed by PollExternalJobsAsync; merged into the view by RefreshJobView.
         private List<JobSnapshot> _ExternalJobs = new List<JobSnapshot>();
+
+        // Ids of agent-run backups this process last saw as Running, so the poll can detect when one
+        // finishes and log its completion statistics to the activity log (the agent run itself is silent in
+        // this process). Touched only on the UI thread from the poll's Post callback.
+        private HashSet<string> _ExternalRunningIds = new HashSet<string>(StringComparer.Ordinal);
         private string? _ActivityText;
 
         // Distinguishes the two kinds of run that share the status workspace and job registry, so cancel
@@ -345,27 +350,27 @@ namespace Armor.Tui
                     await Task.Delay(2000).ConfigureAwait(false);
 
                     List<BackupJob> all = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
+                    Dictionary<string, BackupJob> byId = new Dictionary<string, BackupJob>(StringComparer.Ordinal);
                     List<BackupJob> running = new List<BackupJob>();
                     foreach (BackupJob job in all)
                     {
+                        byId[job.Id] = job;
                         if (job.Status == JobStatusEnum.Running)
                             running.Add(job);
                     }
 
-                    // Resolve names only when there is something to show, so an idle TUI does no extra reads.
+                    // Resolve policy and target names for labels and for completion messages. The tables are
+                    // small, so this stays cheap even on an idle tick.
                     Dictionary<string, string> policyNames = new Dictionary<string, string>(StringComparer.Ordinal);
                     Dictionary<string, string> policyTargets = new Dictionary<string, string>(StringComparer.Ordinal);
                     Dictionary<string, string> targetNames = new Dictionary<string, string>(StringComparer.Ordinal);
-                    if (running.Count > 0)
+                    foreach (Policy p in await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false))
                     {
-                        foreach (Policy p in await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false))
-                        {
-                            policyNames[p.Id] = p.Name;
-                            policyTargets[p.Id] = p.StorageTargetId ?? String.Empty;
-                        }
-                        foreach (StorageTarget t in await _Context.Database.StorageTargets.ReadAllAsync().ConfigureAwait(false))
-                            targetNames[t.Id] = t.Name;
+                        policyNames[p.Id] = p.Name;
+                        policyTargets[p.Id] = p.StorageTargetId ?? String.Empty;
                     }
+                    foreach (StorageTarget t in await _Context.Database.StorageTargets.ReadAllAsync().ConfigureAwait(false))
+                        targetNames[t.Id] = t.Name;
 
                     List<(string PolicyId, JobSnapshot Snapshot)> candidates = new List<(string, JobSnapshot)>();
                     foreach (BackupJob job in running)
@@ -395,11 +400,29 @@ namespace Armor.Tui
                         }
 
                         List<JobSnapshot> external = new List<JobSnapshot>();
+                        HashSet<string> nowRunning = new HashSet<string>(StringComparer.Ordinal);
                         foreach ((string policyId, JobSnapshot snapshot) in candidates)
                         {
-                            if (!owned.Contains(policyId))
-                                external.Add(snapshot);
+                            if (owned.Contains(policyId))
+                                continue;
+                            external.Add(snapshot);
+                            nowRunning.Add(snapshot.Id);
                         }
+
+                        // An agent run this process was showing as in-progress has finished: log its statistics
+                        // to the activity log, since the run itself is silent in this process (it only raised a
+                        // desktop notification from the agent). Guarded so each completion is reported once.
+                        foreach (string id in _ExternalRunningIds)
+                        {
+                            if (nowRunning.Contains(id))
+                                continue;
+                            if (byId.TryGetValue(id, out BackupJob? finished) && finished.Status != JobStatusEnum.Running)
+                            {
+                                string policyName = policyNames.TryGetValue(finished.PolicyId, out string? fn) ? fn : "a policy";
+                                LogExternalCompletion(finished, policyName);
+                            }
+                        }
+                        _ExternalRunningIds = nowRunning;
 
                         _ExternalJobs = external;
                         RefreshJobView();
@@ -1015,6 +1038,42 @@ namespace Armor.Tui
         {
             foreach (string line in stats)
                 SetStatus("- " + line);
+        }
+
+        /// <summary>
+        /// Log the outcome of a backup that ran in another process (the background agent) once this process
+        /// observes it finish. Only fields the engine persists to the job row are used — file count, bytes
+        /// processed/stored/deduplicated, chunk counts, and start/finish times — because a run's read/skip
+        /// tallies are not stored. This mirrors what the aggregate statistics view reports for the same run.
+        /// </summary>
+        /// <param name="job">The finished agent job.</param>
+        /// <param name="policyName">The name of the job's policy.</param>
+        private void LogExternalCompletion(BackupJob job, string policyName)
+        {
+            if (job.Status == JobStatusEnum.Completed)
+            {
+                TimeSpan runtime = job.StartedUtc.HasValue && job.CompletedUtc.HasValue && job.CompletedUtc.Value > job.StartedUtc.Value
+                    ? job.CompletedUtc.Value - job.StartedUtc.Value
+                    : TimeSpan.Zero;
+                double seconds = runtime.TotalSeconds;
+                double megabytesPerSecond = seconds > 0 ? (job.BytesTotal / (1024.0 * 1024.0)) / seconds : 0;
+                string runtimeText = ((int)runtime.TotalHours).ToString("D2") + ":" + runtime.Minutes.ToString("D2") + ":" + runtime.Seconds.ToString("D2");
+
+                SetStatus("Agent backup of '" + policyName + "' complete: " + job.FileCount.ToString("N0") + " files, " + job.ChunksWritten.ToString("N0") + " new / " + job.ChunksReused.ToString("N0") + " reused chunks.");
+                SetStatus("- Total runtime  : " + runtimeText);
+                SetStatus("- Files          : " + job.FileCount.ToString("N0") + ", " + FormatBytes(job.BytesTotal) + " processed");
+                SetStatus("- Stored         : " + FormatBytes(job.BytesWritten) + " (" + job.ChunksWritten.ToString("N0") + " chunks)");
+                SetStatus("- Deduplicated   : " + FormatBytes(job.BytesDeduplicated) + " (" + job.ChunksReused.ToString("N0") + " chunks reused)");
+                SetStatus("- Avg throughput : " + megabytesPerSecond.ToString("0.0") + " MB/s");
+            }
+            else if (job.Status == JobStatusEnum.Failed)
+            {
+                SetStatus("Agent backup of '" + policyName + "' failed" + (String.IsNullOrEmpty(job.Error) ? "." : ": " + job.Error));
+            }
+            else if (job.Status == JobStatusEnum.Canceled)
+            {
+                SetStatus("Agent backup of '" + policyName + "' canceled.");
+            }
         }
 
         // ---- Primary (Enter) actions ----------------------------------------
