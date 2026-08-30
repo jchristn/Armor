@@ -41,7 +41,9 @@ namespace Armor.Core.Service
         /// <param name="progress">Optional observer notified as files are processed.</param>
         /// <returns>The completed backup-job record.</returns>
         /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
-        /// <exception cref="ArmorException">Thrown when the policy, target, or key is missing, or the policy is already running.</exception>
+        /// <exception cref="ArmorException">Thrown when the policy, target, or key is missing.</exception>
+        /// <exception cref="TargetUnreachableException">Thrown when the storage target is not reachable (for example an unplugged removable drive).</exception>
+        /// <exception cref="PolicyAlreadyRunningException">Thrown when the policy is already backing up (its run lock is held).</exception>
         public async Task<BackupJob> RunAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token = default, IProgress<BackupProgress>? progress = null)
         {
             if (String.IsNullOrWhiteSpace(policyId))
@@ -85,7 +87,7 @@ namespace Armor.Core.Service
             RunLock runLock = new RunLock(_Context.Paths.StateDirectory);
             RunLockHandle? handle = runLock.TryAcquire(policy.Id);
             if (handle == null)
-                throw new ArmorException("Policy '" + policyId + "' is already running; the run lock is held.");
+                throw new PolicyAlreadyRunningException("Policy '" + policyId + "' is already running; the run lock is held.");
 
             using (handle)
             {

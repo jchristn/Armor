@@ -26,7 +26,12 @@ namespace Armor.Tui.Widgets
         /// <param name="bytesTotal">Total bytes to process, if known.</param>
         /// <param name="cancelling">True once cancellation has been requested but the job has not yet stopped.</param>
         /// <param name="scanning">True while the run is still pre-scanning the source (before any file is copied).</param>
-        public JobSnapshot(string id, string label, int percent, int filesDone, int filesTotal, long bytesDone, long bytesTotal, bool cancelling, bool scanning)
+        /// <param name="external">True when the run is owned by another process (the background agent), so it shows an
+        /// indeterminate status line — from <paramref name="note"/> — instead of a live progress bar, and cannot be
+        /// canceled from here.</param>
+        /// <param name="note">For an external run, the indeterminate status line to display (for example
+        /// "Scheduled run in progress — started 19:52").</param>
+        public JobSnapshot(string id, string label, int percent, int filesDone, int filesTotal, long bytesDone, long bytesTotal, bool cancelling, bool scanning, bool external = false, string? note = null)
         {
             Id = id ?? throw new ArgumentNullException(nameof(id));
             Label = label ?? String.Empty;
@@ -37,6 +42,8 @@ namespace Armor.Tui.Widgets
             BytesTotal = bytesTotal;
             Cancelling = cancelling;
             Scanning = scanning;
+            External = external;
+            Note = note ?? String.Empty;
         }
 
         /// <summary>The host's opaque job handle.</summary>
@@ -65,6 +72,12 @@ namespace Armor.Tui.Widgets
 
         /// <summary>True while the run is still pre-scanning the source (before any file is copied).</summary>
         public bool Scanning { get; }
+
+        /// <summary>True when the run is owned by another process (the background agent).</summary>
+        public bool External { get; }
+
+        /// <summary>For an external run, the indeterminate status line to display.</summary>
+        public string Note { get; }
     }
 
     /// <summary>
@@ -195,7 +208,17 @@ namespace Armor.Tui.Widgets
             if (2 < height)
                 surface.DrawText(1, 2, Clip(" " + job.Label, width - 1), titleStyle);
 
-            if (job.Scanning)
+            if (job.External)
+            {
+                // A run owned by the background agent: the database gives us no live per-file progress, so
+                // show an indeterminate status line rather than a bar frozen at 0%.
+                string note = String.IsNullOrEmpty(job.Note) ? "In progress (background agent)" : job.Note;
+                if (job.Cancelling)
+                    note += "   — cancelling";
+                if (3 < height)
+                    surface.DrawText(1, 3, Clip(" " + note, width - 1), baseStyle.WithForeground(Color.FromPalette(AccentColor)));
+            }
+            else if (job.Scanning)
             {
                 string scan = "Scanning for files… " + job.FilesTotal + " found";
                 if (job.BytesTotal > 0)

@@ -102,6 +102,12 @@ namespace Armor.Tui
         private RecoverySession? _RecoverSession;
         private JobStatusView? _JobView;
         private readonly List<JobEntry> _Jobs = new List<JobEntry>();
+
+        // Backups running in another process (the background agent). Discovered by polling the shared
+        // database for jobs still marked Running whose policy this process is not itself backing up, so a
+        // scheduler-started run is visible in the in-progress workspace instead of silently holding the
+        // run lock. Refreshed by PollExternalJobsAsync; merged into the view by RefreshJobView.
+        private List<JobSnapshot> _ExternalJobs = new List<JobSnapshot>();
         private string? _ActivityText;
 
         // Distinguishes the two kinds of run that share the status workspace and job registry, so cancel
@@ -120,11 +126,12 @@ namespace Armor.Tui
         /// </summary>
         private sealed class JobEntry
         {
-            public JobEntry(string id, string label, string policyName, CancellationTokenSource cts, JobKind kind = JobKind.Backup)
+            public JobEntry(string id, string label, string policyName, CancellationTokenSource cts, JobKind kind = JobKind.Backup, string policyId = "")
             {
                 Id = id;
                 Label = label;
                 PolicyName = policyName;
+                PolicyId = policyId ?? String.Empty;
                 Cts = cts;
                 Kind = kind;
                 // A restore knows its totals up front (from the backup record), so it never shows the
@@ -139,6 +146,8 @@ namespace Armor.Tui
             public string Label { get; }
 
             public string PolicyName { get; }
+
+            public string PolicyId { get; }
 
             public CancellationTokenSource Cts { get; }
 
@@ -312,10 +321,99 @@ namespace Armor.Tui
 
                 App().Focus("nav");
                 await LoadCurrentSectionAsync().ConfigureAwait(false);
+                _ = PollExternalJobsAsync();
             }
             catch (Exception ex)
             {
                 SetStatus("Fatal: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Periodically discover backups running in another process — the background scheduler agent — by
+        /// reading the shared database for jobs still marked <see cref="JobStatusEnum.Running"/> whose policy
+        /// this process is not itself backing up, and surface them in the in-progress workspace. The engine
+        /// persists a job's file counts only at start and finish, so an agent run is shown with an
+        /// indeterminate "in progress" line rather than a live bar.
+        /// </summary>
+        private async Task PollExternalJobsAsync()
+        {
+            while (true)
+            {
+                try
+                {
+                    await Task.Delay(2000).ConfigureAwait(false);
+
+                    List<BackupJob> all = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
+                    List<BackupJob> running = new List<BackupJob>();
+                    foreach (BackupJob job in all)
+                    {
+                        if (job.Status == JobStatusEnum.Running)
+                            running.Add(job);
+                    }
+
+                    // Resolve names only when there is something to show, so an idle TUI does no extra reads.
+                    Dictionary<string, string> policyNames = new Dictionary<string, string>(StringComparer.Ordinal);
+                    Dictionary<string, string> policyTargets = new Dictionary<string, string>(StringComparer.Ordinal);
+                    Dictionary<string, string> targetNames = new Dictionary<string, string>(StringComparer.Ordinal);
+                    if (running.Count > 0)
+                    {
+                        foreach (Policy p in await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false))
+                        {
+                            policyNames[p.Id] = p.Name;
+                            policyTargets[p.Id] = p.StorageTargetId ?? String.Empty;
+                        }
+                        foreach (StorageTarget t in await _Context.Database.StorageTargets.ReadAllAsync().ConfigureAwait(false))
+                            targetNames[t.Id] = t.Name;
+                    }
+
+                    List<(string PolicyId, JobSnapshot Snapshot)> candidates = new List<(string, JobSnapshot)>();
+                    foreach (BackupJob job in running)
+                    {
+                        string policyName = policyNames.TryGetValue(job.PolicyId, out string? pn) ? pn : "(unknown policy)";
+                        string targetName = policyTargets.TryGetValue(job.PolicyId, out string? tid) && targetNames.TryGetValue(tid, out string? tn) ? tn : "the target";
+                        string label = policyName + " — " + job.BackupType + " → " + targetName;
+
+                        string note = "Scheduled run in progress";
+                        if (job.StartedUtc.HasValue)
+                            note += " — started " + DateTime.SpecifyKind(job.StartedUtc.Value, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm");
+                        if (job.FileCount > 0)
+                            note += " · " + job.FileCount.ToString("N0") + " files";
+
+                        candidates.Add((job.PolicyId, new JobSnapshot(job.Id, label, 0, 0, 0, 0, 0, false, false, external: true, note: note)));
+                    }
+
+                    Post(() =>
+                    {
+                        // Filter out any job whose policy this process is itself backing up — that run is already
+                        // shown from the live registry with a real progress bar, so it must not appear twice.
+                        HashSet<string> owned = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (JobEntry entry in _Jobs)
+                        {
+                            if (entry.Kind == JobKind.Backup && !String.IsNullOrEmpty(entry.PolicyId))
+                                owned.Add(entry.PolicyId);
+                        }
+
+                        List<JobSnapshot> external = new List<JobSnapshot>();
+                        foreach ((string policyId, JobSnapshot snapshot) in candidates)
+                        {
+                            if (!owned.Contains(policyId))
+                                external.Add(snapshot);
+                        }
+
+                        _ExternalJobs = external;
+                        RefreshJobView();
+                    });
+                }
+                catch (ObjectDisposedException)
+                {
+                    return; // The context was disposed on shutdown; stop polling.
+                }
+                catch (Exception)
+                {
+                    // A transient read error (for example a database busy timeout) must not kill the poller;
+                    // it tries again on the next tick.
+                }
             }
         }
 
@@ -2063,6 +2161,7 @@ namespace Armor.Tui
                 }
             }
 
+
             byte[]? dataKey = await UnlockAsync(policy.EncryptionKeyId!).ConfigureAwait(false);
             if (dataKey == null)
                 return;
@@ -2081,7 +2180,7 @@ namespace Armor.Tui
             // Register the run so the status workspace can show its progress and offer to cancel it.
             string jobId = "ui_" + Guid.NewGuid().ToString("N");
             CancellationTokenSource cts = new CancellationTokenSource();
-            JobEntry entry = new JobEntry(jobId, label, policyName, cts);
+            JobEntry entry = new JobEntry(jobId, label, policyName, cts, JobKind.Backup, policyId);
             _Jobs.Add(entry);
             RefreshJobView();
             SetStatus("Backing up '" + policy.Name + "'.");
@@ -2159,6 +2258,18 @@ namespace Armor.Tui
                             Launch(LoadCurrentSectionAsync);
                     });
                 }
+                catch (PolicyAlreadyRunningException)
+                {
+                    // Not a failure: the policy is already backing up (most often a scheduled run in the
+                    // background agent, which the poll surfaces in the in-progress workspace). Say so plainly
+                    // instead of popping a "backup failed" modal.
+                    Post(() =>
+                    {
+                        FinishJob(entry);
+                        SetStatus("A backup of '" + policyName + "' is already in progress; not started again.");
+                        Launch(() => NotifyAsync("Already running", "A backup of '" + policyName + "' is already in progress — most likely a scheduled run started by the background agent.", "Watch it under 'Backups & restores in progress'."));
+                    });
+                }
                 catch (Exception ex)
                 {
                     Post(() =>
@@ -2194,6 +2305,11 @@ namespace Armor.Tui
                     entry.Cancelling,
                     entry.Scanning));
             }
+
+            // Append runs owned by the background agent (from the last database poll), so a scheduler-started
+            // backup is visible here even though this process is not driving it.
+            snapshots.AddRange(_ExternalJobs);
+
             _JobView?.SetJobs(snapshots);
         }
 
@@ -2226,7 +2342,19 @@ namespace Armor.Tui
                 }
             }
             if (entry == null)
+            {
+                // The selection is a run owned by the background agent (shown from the database poll). It has
+                // no cancellation handle in this process, so explain rather than silently doing nothing.
+                foreach (JobSnapshot external in _ExternalJobs)
+                {
+                    if (String.Equals(external.Id, jobId, StringComparison.Ordinal))
+                    {
+                        await NotifyAsync("Managed by the agent", "This backup was started by the background scheduler agent, so it cannot be canceled from here.", "Stop the agent from the tray to cancel it.").ConfigureAwait(false);
+                        return;
+                    }
+                }
                 return;
+            }
 
             bool isRestore = entry.Kind == JobKind.Restore;
             string noun = isRestore ? "restore" : "backup";

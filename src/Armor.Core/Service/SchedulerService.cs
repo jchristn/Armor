@@ -98,6 +98,13 @@ namespace Armor.Core.Service
                     Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': its target is not reachable yet. Will retry.");
                     continue;
                 }
+                catch (PolicyAlreadyRunningException)
+                {
+                    // The policy is already backing up (a manual run holds the lock). Leave the schedule due
+                    // and retry next tick rather than recording a failure for a run that is proceeding fine.
+                    Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': a run is already in progress. Will retry.");
+                    continue;
+                }
                 catch (Exception ex)
                 {
                     // One policy's failure (for example an unreachable target) must not abort the tick

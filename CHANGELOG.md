@@ -14,6 +14,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   single native desktop notification across operating systems — a Windows tray balloon, a macOS
   notification, or Linux `notify-send`. Each run produces one announcement in one place: a modal for
   interactive runs, a desktop notification for scheduled ones.
+- **Scheduled backups appear in the in-progress window.** A backup the background agent starts on a
+  schedule now shows up in **Backups & restores in progress** in the TUI (discovered by polling the
+  shared database), with an indeterminate "Scheduled run in progress" line — the engine records a
+  job's file counts only at start and finish, so an agent run has no live per-file bar. Starting a
+  policy manually while the agent is already running it no longer pops a "backup failed / run lock is
+  held" error; it explains that the run is already in progress and points at the in-progress window.
 - **The activity log is now focusable.** Press <kbd>Tab</kbd> to move focus into the **Activity log**:
   <kbd>↑</kbd>/<kbd>↓</kbd> and <kbd>PgUp</kbd>/<kbd>PgDn</kbd> scroll (new lines auto-follow only while
   you are at the bottom), <kbd>Home</kbd>/<kbd>End</kbd> jump to the oldest/newest line, <kbd>c</kbd>
