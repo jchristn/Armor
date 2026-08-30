@@ -7,6 +7,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Start a backup from the tray.** The agent's system-tray menu gains a **Back up now** submenu
+  listing your policies; picking one runs that policy's backup immediately in the agent — no need to
+  open the app. The run uses the policy's cached password (a policy whose password is not cached says
+  so and points you to the app), appears in the TUI's in-progress window if it is open, and reports
+  its result as a desktop notification. The policy list refreshes as policies change.
 - **Backup completion is announced — exactly once.** When a backup you run from the TUI finishes or
   fails, the TUI pops a modal with the same run statistics already written to the activity log — total
   runtime, files and bytes backed up, files skipped, and throughput on success, or the error on

@@ -1,8 +1,12 @@
 namespace Armor.Agent
 {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Reflection;
+    using System.Text;
+    using System.Threading.Tasks;
+    using Armor.Core.Models;
     using Avalonia;
     using Avalonia.Controls;
     using Avalonia.Controls.ApplicationLifetimes;
@@ -19,6 +23,8 @@ namespace Armor.Agent
         private AgentHost? _Host;
         private TrayIcon? _Tray;
         private NativeMenuItem? _StatusItem;
+        private NativeMenu? _BackupMenu;
+        private string _BackupSignature = String.Empty;
 
         /// <summary>
         /// Initialize application-level styles.
@@ -53,6 +59,14 @@ namespace Armor.Agent
             NativeMenuItem open = new NativeMenuItem("Open");
             open.Click += OnOpen;
             menu.Items.Add(open);
+
+            // "Back up now" holds a submenu of policies; picking one starts an interactive backup in the
+            // agent. Populated once the runtime context is ready and refreshed as the policy list changes.
+            NativeMenuItem backup = new NativeMenuItem("Back up now");
+            _BackupMenu = new NativeMenu();
+            _BackupMenu.Items.Add(new NativeMenuItem("Loading policies…") { IsEnabled = false });
+            backup.Menu = _BackupMenu;
+            menu.Items.Add(backup);
 
             _StatusItem = new NativeMenuItem("Status: Starting");
             _StatusItem.IsEnabled = false;
@@ -95,6 +109,48 @@ namespace Armor.Agent
             {
                 if (_StatusItem != null)
                     _StatusItem.Header = "Status: " + status;
+            });
+
+            // A status change means the context is up and a tick just ran — a cheap, natural moment to keep
+            // the "Back up now" policy list current (the rebuild is skipped when the list is unchanged).
+            _ = RefreshBackupMenuAsync();
+        }
+
+        private async Task RefreshBackupMenuAsync()
+        {
+            AgentHost? host = _Host;
+            if (host == null)
+                return;
+
+            IReadOnlyList<Policy> policies = await host.ListPoliciesAsync().ConfigureAwait(true);
+
+            // Skip the rebuild unless the set of policies actually changed, so an open menu is not disturbed
+            // on every tick.
+            StringBuilder signatureBuilder = new StringBuilder();
+            foreach (Policy policy in policies)
+                signatureBuilder.Append(policy.Id).Append('=').Append(policy.Name).Append('|');
+            string signature = signatureBuilder.ToString();
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_BackupMenu == null || signature == _BackupSignature)
+                    return;
+                _BackupSignature = signature;
+                _BackupMenu.Items.Clear();
+
+                if (policies.Count == 0)
+                {
+                    _BackupMenu.Items.Add(new NativeMenuItem("No policies configured") { IsEnabled = false });
+                    return;
+                }
+
+                foreach (Policy policy in policies)
+                {
+                    string policyId = policy.Id;
+                    NativeMenuItem item = new NativeMenuItem(policy.Name);
+                    item.Click += (sender, e) => _Host?.RunPolicyBackup(policyId);
+                    _BackupMenu.Items.Add(item);
+                }
             });
         }
 
