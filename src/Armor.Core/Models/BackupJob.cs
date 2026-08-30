@@ -141,6 +141,25 @@ namespace Armor.Core.Models
         public bool ScanComplete { get; set; } = false;
 
         /// <summary>
+        /// Live display-only progress flushed periodically while the run is in flight: whether it is still
+        /// scanning. Lets another process draw the same progress bar a local run shows. Not part of the final
+        /// statistics. Default is false.
+        /// </summary>
+        public bool ProgressScanning { get; set; } = false;
+
+        /// <summary>Live display-only count of files processed so far. Default is 0.</summary>
+        public long ProgressFilesDone { get; set; } = 0;
+
+        /// <summary>Live display-only count of files to process, as known so far (grows while scanning). Default is 0.</summary>
+        public long ProgressFilesTotal { get; set; } = 0;
+
+        /// <summary>Live display-only count of source bytes processed so far. Default is 0.</summary>
+        public long ProgressBytesDone { get; set; } = 0;
+
+        /// <summary>Live display-only count of source bytes to process, as known so far. Default is 0.</summary>
+        public long ProgressBytesTotal { get; set; } = 0;
+
+        /// <summary>
         /// Error message if the run failed, or null on success.
         /// </summary>
         public string? Error { get; set; } = null;

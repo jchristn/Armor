@@ -139,15 +139,17 @@ namespace Armor.Core.Database.Sqlite.Implementations
         }
 
         /// <inheritdoc/>
-        public async Task UpdateProgressAsync(string jobId, long fileCount, long bytesTotal, long bytesWritten, CancellationToken token = default)
+        public async Task UpdateProgressAsync(string jobId, bool scanning, long filesDone, long filesTotal, long bytesDone, long bytesTotal, CancellationToken token = default)
         {
             if (String.IsNullOrWhiteSpace(jobId))
                 throw new ArgumentNullException(nameof(jobId));
 
             await _Driver.ExecuteQueryAsync(
-                "UPDATE backup_jobs SET file_count = " + Sanitizer.Int(fileCount) +
-                ", bytes_total = " + Sanitizer.Int(bytesTotal) +
-                ", bytes_written = " + Sanitizer.Int(bytesWritten) +
+                "UPDATE backup_jobs SET progress_scanning = " + Sanitizer.Bool(scanning) +
+                ", progress_files_done = " + Sanitizer.Int(filesDone) +
+                ", progress_files_total = " + Sanitizer.Int(filesTotal) +
+                ", progress_bytes_done = " + Sanitizer.Int(bytesDone) +
+                ", progress_bytes_total = " + Sanitizer.Int(bytesTotal) +
                 " WHERE id = " + Sanitizer.Literal(jobId) + ";",
                 false, token).ConfigureAwait(false);
         }
@@ -239,6 +241,11 @@ namespace Armor.Core.Database.Sqlite.Implementations
             job.ScanComplete = Converters.GetBool(row, "scan_complete");
             job.SkippedFiles = Converters.GetLong(row, "skipped_files");
             job.SkippedBytes = Converters.GetLong(row, "skipped_bytes");
+            job.ProgressScanning = Converters.GetBool(row, "progress_scanning");
+            job.ProgressFilesDone = Converters.GetLong(row, "progress_files_done");
+            job.ProgressFilesTotal = Converters.GetLong(row, "progress_files_total");
+            job.ProgressBytesDone = Converters.GetLong(row, "progress_bytes_done");
+            job.ProgressBytesTotal = Converters.GetLong(row, "progress_bytes_total");
             job.Error = Converters.GetStringOrNull(row, "error");
             job.CreatedUtc = Converters.GetDateTime(row, "created_utc");
             return job;

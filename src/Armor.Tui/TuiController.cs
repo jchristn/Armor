@@ -389,13 +389,25 @@ namespace Armor.Tui
                         string targetName = policyTargets.TryGetValue(job.PolicyId, out string? tid) && targetNames.TryGetValue(tid, out string? tn) ? tn : "the target";
                         string label = policyName + " — " + job.BackupType + " → " + targetName;
 
-                        string note = "Scheduled run in progress";
-                        if (job.StartedUtc.HasValue)
-                            note += " — started " + DateTime.SpecifyKind(job.StartedUtc.Value, DateTimeKind.Utc).ToLocalTime().ToString("HH:mm");
-                        if (job.FileCount > 0)
-                            note += " · " + job.FileCount.ToString("N0") + " files";
+                        // Build the same progress figures a local run reports, from the live columns the engine
+                        // flushes during the run, so the agent run draws a real bar rather than a static line.
+                        int percent = job.ProgressBytesTotal > 0
+                            ? (int)(job.ProgressBytesDone * 100 / job.ProgressBytesTotal)
+                            : (job.ProgressFilesTotal > 0 ? (int)(job.ProgressFilesDone * 100 / job.ProgressFilesTotal) : 0);
+                        percent = Math.Clamp(percent, 0, 100);
 
-                        candidates.Add((job.PolicyId, new JobSnapshot(job.Id, label, 0, 0, 0, 0, 0, false, false, external: true, note: note)));
+                        candidates.Add((job.PolicyId, new JobSnapshot(
+                            job.Id,
+                            label,
+                            percent,
+                            (int)job.ProgressFilesDone,
+                            (int)job.ProgressFilesTotal,
+                            job.ProgressBytesDone,
+                            job.ProgressBytesTotal,
+                            false,
+                            job.ProgressScanning,
+                            external: true,
+                            note: null)));
                     }
 
                     Post(() =>

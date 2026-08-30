@@ -85,18 +85,21 @@ namespace Armor.Core.Database.Interfaces
         Task SetScanCompleteAsync(string jobId, bool complete, CancellationToken token = default);
 
         /// <summary>
-        /// Update only the live-progress columns of a running job — file count, total bytes, and bytes
-        /// written — without touching its other fields. Called periodically during a run so another process
-        /// (for example the TUI's in-progress view) can watch the run advance; the authoritative final totals
-        /// are written when the run finishes.
+        /// Update only the live display-only progress columns of a running job — the scanning flag and the
+        /// files-done/total and bytes-done/total counters — without touching its other fields. Called
+        /// periodically during a run so another process (for example the TUI's in-progress view) can draw the
+        /// same progress bar it draws for a local run. The authoritative final totals are written to the
+        /// statistics columns when the run finishes.
         /// </summary>
         /// <param name="jobId">Backup job identifier. Cannot be null or whitespace.</param>
-        /// <param name="fileCount">Files processed so far.</param>
-        /// <param name="bytesTotal">Total source bytes known so far (grows while scanning).</param>
-        /// <param name="bytesWritten">Bytes written to the target so far.</param>
+        /// <param name="scanning">Whether the run is still scanning the source.</param>
+        /// <param name="filesDone">Files processed so far.</param>
+        /// <param name="filesTotal">Files to process, as known so far (grows while scanning).</param>
+        /// <param name="bytesDone">Source bytes processed so far.</param>
+        /// <param name="bytesTotal">Source bytes to process, as known so far.</param>
         /// <param name="token">Cancellation token.</param>
         /// <returns>A task that completes when the progress is written.</returns>
-        Task UpdateProgressAsync(string jobId, long fileCount, long bytesTotal, long bytesWritten, CancellationToken token = default);
+        Task UpdateProgressAsync(string jobId, bool scanning, long filesDone, long filesTotal, long bytesDone, long bytesTotal, CancellationToken token = default);
 
         /// <summary>
         /// Determine whether a backup job exists.

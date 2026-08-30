@@ -36,12 +36,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   log is still mirrored to `~/.armor/logs/armor.log.<date>` on disk.
 
 ### Changed
-- **Backups report live progress across processes.** The engine now flushes a running job's file count,
-  total bytes, and bytes written to the database every couple of seconds, not just at start and finish.
-  This lets the TUI's in-progress window show an agent-started (or otherwise external) run actually
-  advancing — its file count climbs — instead of a static "started at" line. `go.bat` now stops the
-  tray agent before rebuilding, so the agent no longer holds `Armor.Core.dll` open and the launched
-  TUI is never a stale build.
+- **An agent-run backup shows a real progress bar in the TUI.** A run driven by the background agent
+  now draws the same progress bar (percentage, files, bytes, and the scanning phase) as a backup
+  started locally in the TUI, instead of a static "in progress" line. The engine flushes live progress
+  — scanning flag, files done/total, bytes done/total — to dedicated database columns every couple of
+  seconds, and the in-progress view reconstructs the bar from them. Agent-owned runs are tagged
+  "(agent)" and are still canceled from the tray, not the TUI. `go.bat` now stops the tray agent before
+  rebuilding, so the agent no longer holds `Armor.Core.dll` open and the launched TUI is never a stale
+  build.
 - **A scheduled backup to an offline removable drive no longer counts as a failure.** When a scheduled
   policy targets a USB/removable disk that is not currently connected, the scheduler now skips it and
   leaves the schedule due — it runs automatically once the drive is reconnected — instead of recording

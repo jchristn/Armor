@@ -496,9 +496,14 @@ namespace Armor.Core.Engine
                         while (true)
                         {
                             await Task.Delay(ProgressPersistMilliseconds, failure.Token).ConfigureAwait(false);
-                            long filesDone = Interlocked.Read(ref state.FilesDone);
-                            long bytesWrittenNow = Interlocked.Read(ref state.BytesWritten);
-                            await _Database.BackupJobs.UpdateProgressAsync(job.Id, filesDone, scan.Bytes, bytesWrittenNow, failure.Token).ConfigureAwait(false);
+                            await _Database.BackupJobs.UpdateProgressAsync(
+                                job.Id,
+                                !scan.Complete,
+                                Interlocked.Read(ref state.FilesDone),
+                                scan.Files,
+                                Interlocked.Read(ref state.BytesDone),
+                                scan.Bytes,
+                                failure.Token).ConfigureAwait(false);
                         }
                     }
                     catch (OperationCanceledException)

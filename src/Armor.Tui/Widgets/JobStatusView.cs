@@ -205,20 +205,14 @@ namespace Armor.Tui.Widgets
             if (_Focused)
                 titleStyle = titleStyle.WithAttribute(CellAttributes.Reverse, true);
 
+            // Agent-owned runs carry an "(agent)" tag so it is clear they are driven by the background
+            // process (and are canceled from the tray, not here); they otherwise draw the same bar as a
+            // local run, from the live progress the engine flushes to the database.
+            string titleText = " " + job.Label + (job.External ? "   (agent)" : "");
             if (2 < height)
-                surface.DrawText(1, 2, Clip(" " + job.Label, width - 1), titleStyle);
+                surface.DrawText(1, 2, Clip(titleText, width - 1), titleStyle);
 
-            if (job.External)
-            {
-                // A run owned by the background agent: the database gives us no live per-file progress, so
-                // show an indeterminate status line rather than a bar frozen at 0%.
-                string note = String.IsNullOrEmpty(job.Note) ? "In progress (background agent)" : job.Note;
-                if (job.Cancelling)
-                    note += "   — cancelling";
-                if (3 < height)
-                    surface.DrawText(1, 3, Clip(" " + note, width - 1), baseStyle.WithForeground(Color.FromPalette(AccentColor)));
-            }
-            else if (job.Scanning)
+            if (job.Scanning)
             {
                 string scan = "Scanning for files… " + job.FilesTotal + " found";
                 if (job.BytesTotal > 0)

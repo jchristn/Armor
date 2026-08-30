@@ -276,6 +276,22 @@ namespace Armor.Core.Database.Sqlite
                     "ALTER TABLE backup_jobs ADD COLUMN skipped_bytes INTEGER NOT NULL DEFAULT 0;"
                 }));
 
+            migrations.Add(new SchemaMigration(
+                10,
+                "Backup-job live-progress columns",
+                new List<string>
+                {
+                    // Live progress a run flushes every few seconds so another process (the TUI's in-progress
+                    // view) can draw the same progress bar it draws for a local run. These are display-only and
+                    // never feed the final statistics, which come from the authoritative columns written when
+                    // the run completes.
+                    "ALTER TABLE backup_jobs ADD COLUMN progress_scanning INTEGER NOT NULL DEFAULT 0;",
+                    "ALTER TABLE backup_jobs ADD COLUMN progress_files_done INTEGER NOT NULL DEFAULT 0;",
+                    "ALTER TABLE backup_jobs ADD COLUMN progress_files_total INTEGER NOT NULL DEFAULT 0;",
+                    "ALTER TABLE backup_jobs ADD COLUMN progress_bytes_done INTEGER NOT NULL DEFAULT 0;",
+                    "ALTER TABLE backup_jobs ADD COLUMN progress_bytes_total INTEGER NOT NULL DEFAULT 0;"
+                }));
+
             return migrations;
         }
 
