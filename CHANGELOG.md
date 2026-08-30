@@ -7,6 +7,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Backup targets show a URL-style location.** The **Location** column in the Backup targets list (and
+  the Recover chooser) now shows a scheme-prefixed address for every target type — `s3://bucket`,
+  `azure://container`, `google://bucket`, `smb://host/share`, `nfs://host/export`, or the plain path for
+  a local disk — instead of only a path for disk targets and a dash for everything else. A configured
+  repository-root prefix is appended as a path segment.
 - **Start a backup from the tray.** The agent's system-tray menu gains a **Back up now** submenu
   listing your policies; picking one runs that policy's backup immediately in the agent — no need to
   open the app. The run uses the policy's cached password (a policy whose password is not cached says

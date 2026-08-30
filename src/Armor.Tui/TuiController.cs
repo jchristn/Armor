@@ -513,7 +513,7 @@ namespace Armor.Tui
                 {
                     target.Name,
                     target.Type.ToString(),
-                    String.IsNullOrWhiteSpace(target.DiskPath) ? "—" : target.DiskPath!,
+                    DescribeTargetLocation(target),
                 }, target));
             }
 
@@ -696,7 +696,7 @@ namespace Armor.Tui
                 {
                     target.Name,
                     target.Type.ToString(),
-                    String.IsNullOrWhiteSpace(target.DiskPath) ? "—" : target.DiskPath!,
+                    DescribeTargetLocation(target),
                 }, target));
             }
 
@@ -1001,6 +1001,54 @@ namespace Armor.Tui
         {
             DateTime asUtc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
             return asUtc.ToString("yyyy-MM-dd HH:mm") + "Z · " + asUtc.ToLocalTime().ToString("HH:mm zzz");
+        }
+
+        /// <summary>
+        /// Format a storage target's location as a scheme-prefixed URL for the targets list — for example
+        /// <c>s3://bucket</c>, <c>azure://container</c>, <c>google://bucket</c>, <c>smb://host/share</c>,
+        /// <c>nfs://host/export</c>, or the plain filesystem path for a local disk. When the target has a
+        /// repository-root prefix it is appended as a path segment. Returns "—" when nothing is configured.
+        /// </summary>
+        /// <param name="target">The storage target.</param>
+        /// <returns>The location string.</returns>
+        private static string DescribeTargetLocation(StorageTarget target)
+        {
+            string root = (target.RepositoryRoot ?? String.Empty).Trim().Trim('/');
+            string suffix = root.Length > 0 ? "/" + root : String.Empty;
+
+            switch (target.Type)
+            {
+                case StorageTargetTypeEnum.Disk:
+                    return String.IsNullOrWhiteSpace(target.DiskPath) ? "—" : target.DiskPath!;
+                case StorageTargetTypeEnum.AmazonS3:
+                    return String.IsNullOrWhiteSpace(target.Bucket) ? "—" : "s3://" + target.Bucket + suffix;
+                case StorageTargetTypeEnum.AzureBlob:
+                    return String.IsNullOrWhiteSpace(target.Container) ? "—" : "azure://" + target.Container + suffix;
+                case StorageTargetTypeEnum.GoogleCloud:
+                    return String.IsNullOrWhiteSpace(target.Bucket) ? "—" : "google://" + target.Bucket + suffix;
+                case StorageTargetTypeEnum.Cifs:
+                    return String.IsNullOrWhiteSpace(target.Host) && String.IsNullOrWhiteSpace(target.ShareName)
+                        ? "—"
+                        : "smb://" + JoinHostShare(target.Host, target.ShareName) + suffix;
+                case StorageTargetTypeEnum.Nfs:
+                    return String.IsNullOrWhiteSpace(target.Host) && String.IsNullOrWhiteSpace(target.ShareName)
+                        ? "—"
+                        : "nfs://" + JoinHostShare(target.Host, target.ShareName) + suffix;
+                default:
+                    return "—";
+            }
+        }
+
+        /// <summary>Join a host and share into a <c>host/share</c> segment, tolerating either being empty.</summary>
+        private static string JoinHostShare(string? host, string? share)
+        {
+            string h = (host ?? String.Empty).Trim();
+            string s = (share ?? String.Empty).Trim().TrimStart('/');
+            if (h.Length == 0)
+                return s;
+            if (s.Length == 0)
+                return h;
+            return h + "/" + s;
         }
 
         private static string FormatBytes(long bytes)
