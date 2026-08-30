@@ -39,6 +39,49 @@ of files streams to and from the target without ever holding the whole file list
 Because the wrapped key envelope and repository header travel with the data on the target,
 a fresh machine can restore with nothing but the target and your password.
 
+## Screenshots
+
+Armor is driven entirely from a terminal UI — a persistent dashboard with keyboard-driven
+navigation, no mouse required.
+
+<details>
+<summary><b>Click to expand a tour of the interface</b></summary>
+<br>
+
+**The dashboard.** A left-hand nav steps through setup (backup targets, passwords, policies,
+schedules) and operations (runs, jobs, recover); the chosen section fills the main pane. Here it
+lists the configured backup targets with each one's type and URL-style location. Below, a focusable
+status workspace shows in-flight backups and restores, and an activity log records events tagged by
+severity.
+
+![Armor dashboard showing the backup-targets list, the in-progress workspace, and the activity log](assets/ss1.png)
+
+**Adding a backup target.** Armor writes to a local folder or external USB drive, Amazon S3 (or any
+S3-compatible endpoint), Azure Blob Storage, Google Cloud Storage, a CIFS/SMB share, or an NFS export.
+
+![Menu to choose a backup-target type: local folder or USB, Amazon S3, Azure Blob, Google Cloud, CIFS/SMB, or NFS](assets/ss2.png)
+
+**Choosing what to protect.** A checkbox tree browses the filesystem so a policy includes exactly the
+folders and files you want — Space toggles a node, Enter confirms.
+
+![Filesystem tree with checkboxes for selecting folders and files to back up](assets/ss3.png)
+
+**A backup in progress.** The policy list sits above a live progress rectangle — percentage, files,
+and bytes — for an incremental run to S3. Tab into the workspace to select and cancel a running job.
+
+![Policies list with a live progress bar for an incremental backup to Amazon S3, at 14 percent](assets/ss4.png)
+
+**Point-in-time recovery.** Every completed run is a restore point; pick the exact moment to roll back
+to (timestamps shown in both UTC and local time).
+
+![List of point-in-time restore points for a policy, each with a UTC and local timestamp](assets/ss5.png)
+
+**Restoring.** Choose whether files return to their original locations or land in a folder you pick.
+
+![Prompt asking whether to restore files to their original locations or into a different folder](assets/ss6.png)
+
+</details>
+
 ## Storage targets
 
 Armor writes to local filesystem paths (including external USB drives), CIFS/SMB
