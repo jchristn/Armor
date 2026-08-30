@@ -10,6 +10,7 @@ namespace Armor.Tui
     using Armor.Core.Enums;
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
+    using Armor.Core.Scheduling;
     using Armor.Core.Security;
     using Armor.Core.Service;
     using Armor.Tui.Widgets;
@@ -1465,6 +1466,9 @@ namespace Armor.Tui
             Schedule schedule = new Schedule();
             schedule.PolicyId = policy.Id;
             schedule.CronExpression = built.Value.Cron;
+            // Compute the first run now so the "Next run" column is populated immediately rather than
+            // staying "—" until the scheduler's next tick fills it in.
+            schedule.NextRunUtc = new ScheduleEvaluator().ComputeNextRun(schedule, DateTime.UtcNow);
             await _Context.Database.Schedules.CreateAsync(schedule).ConfigureAwait(false);
             await LoadCurrentSectionAsync().ConfigureAwait(false);
             SetStatus("Scheduled '" + policy.Name + "': " + built.Value.Description);
@@ -2179,8 +2183,9 @@ namespace Armor.Tui
                         if (built != null)
                         {
                             schedule.CronExpression = built.Value.Cron;
-                            // Recompute the next run from the new frequency on the following tick.
-                            schedule.NextRunUtc = null;
+                            // Recompute the next run from the new frequency right away so the "Next run"
+                            // column reflects the change immediately rather than after the next tick.
+                            schedule.NextRunUtc = new ScheduleEvaluator().ComputeNextRun(schedule, DateTime.UtcNow);
                         }
                         break;
                     }
