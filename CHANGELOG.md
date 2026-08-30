@@ -6,6 +6,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Backup completion is announced — exactly once.** When a backup you run from the TUI finishes or
+  fails, the TUI pops a modal with the same run statistics already written to the activity log — total
+  runtime, files and bytes backed up, files skipped, and throughput on success, or the error on
+  failure. Scheduled backups run by the tray agent (which has no on-screen modal) instead raise a
+  single native desktop notification across operating systems — a Windows tray balloon, a macOS
+  notification, or Linux `notify-send`. Each run produces one announcement in one place: a modal for
+  interactive runs, a desktop notification for scheduled ones.
+
 ## [0.3.0] - 2026-08-29
 
 Exclude visibility, restore progress, and a paste fix in the TUI.

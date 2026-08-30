@@ -4,6 +4,7 @@ namespace Armor.Agent
     using System.Collections.Generic;
     using System.Threading;
     using System.Threading.Tasks;
+    using Armor.Core.Diagnostics;
     using Armor.Core.Models;
     using Armor.Core.Service;
 
@@ -70,7 +71,17 @@ namespace Armor.Agent
                             policy => KeyProviderAsync(current, policy, token),
                             DateTime.UtcNow,
                             token,
-                            (schedule, ex) => SetStatus("A scheduled backup failed: " + ex.Message)).ConfigureAwait(false);
+                            (schedule, ex) =>
+                            {
+                                SetStatus("A scheduled backup failed: " + ex.Message);
+                                DesktopNotifier.Notify("Armor — backup failed", ex.Message);
+                            },
+                            (schedule, policy, job) =>
+                            {
+                                string summary = BackupJobSummary.OneLine(job);
+                                SetStatus("Backed up '" + policy.Name + "': " + summary);
+                                DesktopNotifier.Notify("Armor — backup complete: " + policy.Name, summary);
+                            }).ConfigureAwait(false);
                         SetStatus(ran > 0 ? "Ran " + ran + " backup(s)" : "Idle");
                     }
                     catch (OperationCanceledException)

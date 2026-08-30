@@ -38,9 +38,10 @@ namespace Armor.Core.Service
         /// <param name="nowUtc">The current time.</param>
         /// <param name="token">Cancellation token.</param>
         /// <param name="onError">Optional callback invoked when a single schedule's backup fails; the tick continues with the rest.</param>
+        /// <param name="onCompleted">Optional callback invoked after a schedule's backup completes successfully, with the policy and the finished job so the host can report its result.</param>
         /// <returns>The number of schedules that ran a backup.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="keyProvider"/> is null.</exception>
-        public async Task<int> TickAsync(Func<Policy, Task<byte[]?>> keyProvider, DateTime nowUtc, CancellationToken token = default, Action<Schedule, Exception>? onError = null)
+        public async Task<int> TickAsync(Func<Policy, Task<byte[]?>> keyProvider, DateTime nowUtc, CancellationToken token = default, Action<Schedule, Exception>? onError = null, Action<Schedule, Policy, BackupJob>? onCompleted = null)
         {
             if (keyProvider == null)
                 throw new ArgumentNullException(nameof(keyProvider));
@@ -77,9 +78,10 @@ namespace Armor.Core.Service
                 if (dataKey == null)
                     continue;
 
+                BackupJob job;
                 try
                 {
-                    await backupService.RunAsync(policy.Id, dataKey, null, true, token).ConfigureAwait(false);
+                    job = await backupService.RunAsync(policy.Id, dataKey, null, true, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -97,6 +99,17 @@ namespace Armor.Core.Service
                 _Evaluator.MarkRan(schedule, nowUtc);
                 await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
                 ran += 1;
+
+                // Surface the completed run to the host (the tray agent raises a desktop notification). Kept
+                // outside the try above so a reporting hiccup cannot be mistaken for a backup failure.
+                try
+                {
+                    onCompleted?.Invoke(schedule, policy, job);
+                }
+                catch (Exception)
+                {
+                    // Reporting a completion must never disrupt the scheduling loop.
+                }
             }
 
             return ran;

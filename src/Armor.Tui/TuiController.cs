@@ -877,10 +877,14 @@ namespace Armor.Tui
         }
 
         /// <summary>
-        /// Write a run-statistics block to the activity log after a completed backup: total runtime, files
-        /// and bytes backed up, files and bytes skipped, and the per-second file and byte throughput.
+        /// Build the run-statistics block for a completed backup: total runtime, files and bytes backed up,
+        /// files and bytes skipped, and the per-second file and byte throughput. The same lines feed the
+        /// activity log and the completion modal so the two always agree.
         /// </summary>
-        private void LogBackupStatistics(BackupJob job, TimeSpan runtime)
+        /// <param name="job">The finished job.</param>
+        /// <param name="runtime">The wall-clock duration of the run.</param>
+        /// <returns>The statistics lines, one metric per line.</returns>
+        private static List<string> BuildBackupStatistics(BackupJob job, TimeSpan runtime)
         {
             double seconds = runtime.TotalSeconds;
             string runtimeText = ((int)runtime.TotalHours).ToString("D2") + ":" + runtime.Minutes.ToString("D2") + ":" + runtime.Seconds.ToString("D2");
@@ -892,11 +896,24 @@ namespace Armor.Tui
             double filesPerSecond = seconds > 0 ? job.CopiedFiles / seconds : 0;
             double bytesPerSecond = seconds > 0 ? job.BytesWritten / seconds : 0;
 
-            SetStatus("- Total runtime   : " + runtimeText);
-            SetStatus("- Files backed up : " + job.CopiedFiles.ToString("N0") + ", " + FormatBytes(job.BytesWritten));
-            SetStatus("- Files skipped   : " + job.SkippedFiles.ToString("N0") + ", " + FormatBytes(job.SkippedBytes));
-            SetStatus("- Files/second    : " + filesPerSecond.ToString("N1"));
-            SetStatus("- Bytes/second    : " + FormatBytes((long)bytesPerSecond) + "/s");
+            return new List<string>
+            {
+                "Total runtime   : " + runtimeText,
+                "Files backed up : " + job.CopiedFiles.ToString("N0") + ", " + FormatBytes(job.BytesWritten),
+                "Files skipped   : " + job.SkippedFiles.ToString("N0") + ", " + FormatBytes(job.SkippedBytes),
+                "Files/second    : " + filesPerSecond.ToString("N1"),
+                "Bytes/second    : " + FormatBytes((long)bytesPerSecond) + "/s",
+            };
+        }
+
+        /// <summary>
+        /// Write a run-statistics block to the activity log, each line prefixed with a dash.
+        /// </summary>
+        /// <param name="stats">The statistics lines from <see cref="BuildBackupStatistics"/>.</param>
+        private void LogBackupStatistics(IReadOnlyList<string> stats)
+        {
+            foreach (string line in stats)
+                SetStatus("- " + line);
         }
 
         // ---- Primary (Enter) actions ----------------------------------------
@@ -2120,8 +2137,11 @@ namespace Armor.Tui
                     Post(() =>
                     {
                         FinishJob(entry);
-                        SetStatus("Backup " + job.Status + ": " + job.FileCount + " files, " + job.ChunksWritten + " new / " + job.ChunksReused + " reused chunks.");
-                        LogBackupStatistics(job, runtime);
+                        string summary = "Backup " + job.Status + ": " + job.FileCount + " files, " + job.ChunksWritten + " new / " + job.ChunksReused + " reused chunks.";
+                        List<string> stats = BuildBackupStatistics(job, runtime);
+                        SetStatus(summary);
+                        LogBackupStatistics(stats);
+                        ShowBackupResultModal("Backup complete", policyName, summary, stats);
                         if (_Current == Section.Jobs || _Current == Section.Runs)
                             Launch(LoadCurrentSectionAsync);
                     });
@@ -2142,6 +2162,9 @@ namespace Armor.Tui
                     {
                         FinishJob(entry);
                         SetStatus("Backup of '" + policyName + "' failed: " + ex.Message);
+                        ShowBackupResultModal("Backup failed", policyName, "The backup did not finish.", new List<string> { ex.Message });
+                        if (_Current == Section.Jobs || _Current == Section.Runs)
+                            Launch(LoadCurrentSectionAsync);
                     });
                 }
             });
@@ -2837,6 +2860,28 @@ namespace Armor.Tui
             // Mirror the notification into the activity log so it persists after the modal is dismissed.
             SetStatus(lines.Length > 0 ? title + " — " + lines[0] : title);
             return App().ShowAsync(new ArmorSplashModal(title, lines, "Press any key to continue"));
+        }
+
+        /// <summary>
+        /// Pop a modal summarizing a finished backup — the same headline and statistics already written to
+        /// the activity log. Shown fire-and-forget (the caller is a UI-thread post that cannot await) and
+        /// left-aligned so the aligned metric columns line up.
+        /// </summary>
+        /// <param name="title">The modal title, e.g. "Backup complete" or "Backup failed".</param>
+        /// <param name="policyName">The policy the run belonged to; appended to the title.</param>
+        /// <param name="headline">The one-line summary shown first inside the modal.</param>
+        /// <param name="stats">The detail lines shown beneath the headline.</param>
+        private void ShowBackupResultModal(string title, string policyName, string headline, IReadOnlyList<string> stats)
+        {
+            List<string> lines = new List<string> { headline };
+            if (stats.Count > 0)
+            {
+                lines.Add(String.Empty);
+                foreach (string line in stats)
+                    lines.Add(line);
+            }
+
+            Launch(() => App().ShowAsync(new ArmorSplashModal(title + " — " + policyName, lines, "Press any key to close", centered: false)));
         }
 
         // ---- Plumbing --------------------------------------------------------
