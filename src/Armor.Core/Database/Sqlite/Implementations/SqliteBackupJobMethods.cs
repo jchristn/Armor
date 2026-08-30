@@ -139,6 +139,20 @@ namespace Armor.Core.Database.Sqlite.Implementations
         }
 
         /// <inheritdoc/>
+        public async Task UpdateProgressAsync(string jobId, long fileCount, long bytesTotal, long bytesWritten, CancellationToken token = default)
+        {
+            if (String.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentNullException(nameof(jobId));
+
+            await _Driver.ExecuteQueryAsync(
+                "UPDATE backup_jobs SET file_count = " + Sanitizer.Int(fileCount) +
+                ", bytes_total = " + Sanitizer.Int(bytesTotal) +
+                ", bytes_written = " + Sanitizer.Int(bytesWritten) +
+                " WHERE id = " + Sanitizer.Literal(jobId) + ";",
+                false, token).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc/>
         public async Task<bool> ExistsAsync(string id, CancellationToken token = default)
         {
             if (String.IsNullOrWhiteSpace(id))

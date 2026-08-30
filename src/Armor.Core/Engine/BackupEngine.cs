@@ -32,6 +32,7 @@ namespace Armor.Core.Engine
         // How long the work-list producer waits before re-checking for newly scanned rows when the list has
         // temporarily drained but the scan is still running.
         private const int ScanPollMilliseconds = 50;
+        private const int ProgressPersistMilliseconds = 2000;
 
         private readonly DatabaseDriverBase _Database;
         private readonly FileEnumerator _Enumerator = new FileEnumerator();
@@ -484,6 +485,32 @@ namespace Armor.Core.Engine
                     }
                 }, failure.Token);
 
+                // Periodically flush the live counters to the job row so another process (the TUI's
+                // in-progress view) can watch a run that this process is driving silently — the per-file
+                // progress observer is in-process only. Best-effort: a persistence hiccup never fails the run,
+                // and the authoritative totals are written when the run completes.
+                Task persister = Task.Run(async () =>
+                {
+                    try
+                    {
+                        while (true)
+                        {
+                            await Task.Delay(ProgressPersistMilliseconds, failure.Token).ConfigureAwait(false);
+                            long filesDone = Interlocked.Read(ref state.FilesDone);
+                            long bytesWrittenNow = Interlocked.Read(ref state.BytesWritten);
+                            await _Database.BackupJobs.UpdateProgressAsync(job.Id, filesDone, scan.Bytes, bytesWrittenNow, failure.Token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // The run finished or was canceled; stop persisting.
+                    }
+                    catch (Exception)
+                    {
+                        // Progress persistence is a courtesy; never let it fault the run.
+                    }
+                }, failure.Token);
+
                 Task[] workerTasks = new Task[workers];
                 for (int i = 0; i < workers; i++)
                 {
@@ -532,6 +559,15 @@ namespace Armor.Core.Engine
                 catch
                 {
                     // Producer faults are surfaced through IsFaulted below.
+                }
+
+                try
+                {
+                    await persister.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The persister swallows its own errors; this observes the task so it is never unobserved.
                 }
 
                 // If the user canceled, that outranks any incidental cancellation the workers observed.

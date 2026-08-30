@@ -113,6 +113,10 @@ namespace Armor.Tui
         // finishes and log its completion statistics to the activity log (the agent run itself is silent in
         // this process). Touched only on the UI thread from the poll's Post callback.
         private HashSet<string> _ExternalRunningIds = new HashSet<string>(StringComparer.Ordinal);
+
+        // Last count of Running backup rows the poll saw, so a change can be logged once (a diagnostic that
+        // confirms, from a live session, whether this process is seeing another process's in-flight runs).
+        private int _LastPolledRunning = -1;
         private string? _ActivityText;
 
         // Distinguishes the two kinds of run that share the status workspace and job registry, so cancel
@@ -357,6 +361,12 @@ namespace Armor.Tui
                         byId[job.Id] = job;
                         if (job.Status == JobStatusEnum.Running)
                             running.Add(job);
+                    }
+
+                    if (running.Count != _LastPolledRunning)
+                    {
+                        _LastPolledRunning = running.Count;
+                        Armor.Core.Diagnostics.ArmorLog.Debug("In-progress poll: " + running.Count + " backup(s) currently Running in the database.");
                     }
 
                     // Resolve policy and target names for labels and for completion messages. The tables are
