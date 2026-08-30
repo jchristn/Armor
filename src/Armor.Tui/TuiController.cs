@@ -366,7 +366,7 @@ namespace Armor.Tui
                     if (running.Count != _LastPolledRunning)
                     {
                         _LastPolledRunning = running.Count;
-                        Armor.Core.Diagnostics.ArmorLog.Debug("In-progress poll: " + running.Count + " backup(s) currently Running in the database.");
+                        Armor.Core.Diagnostics.ArmorLog.Debug("In-progress poll: " + running.Count + " backup(s) currently running in the database.");
                     }
 
                     // Resolve policy and target names for labels and for completion messages. The tables are
