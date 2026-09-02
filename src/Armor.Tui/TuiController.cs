@@ -483,7 +483,7 @@ namespace Armor.Tui
         private async Task LoadPoliciesAsync()
         {
             List<Policy> policies = await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "Name", "Type", "Retain", "Includes", "Enabled" }, new int[] { 5, 3, 2, 2, 2 });
+            Content().SetColumns(new[] { "Name", "Type", "Retain", "Includes", "Excludes", "Enabled" }, new int[] { 5, 3, 2, 2, 2, 2 });
 
             List<TableRow> rows = new List<TableRow>();
             foreach (Policy policy in policies)
@@ -494,6 +494,7 @@ namespace Armor.Tui
                     policy.BackupType.ToString(),
                     policy.RetentionDays + "d",
                     policy.IncludePaths.Count.ToString(),
+                    policy.ExcludePatterns.Count.ToString(),
                     policy.Enabled ? "yes" : "no",
                 }, policy));
             }
@@ -578,7 +579,7 @@ namespace Armor.Tui
         {
             List<Schedule> schedules = await _Context.Database.Schedules.ReadAllAsync().ConfigureAwait(false);
             Dictionary<string, string> policyNames = await BuildPolicyNameMapAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "Policy", "Schedule", "State", "Next run" }, new int[] { 3, 4, 2, 9 });
+            Content().SetColumns(new[] { "Policy", "Schedule", "State", "Last run", "Next run" }, new int[] { 3, 4, 2, 9, 9 });
 
             List<TableRow> rows = new List<TableRow>();
             foreach (Schedule schedule in schedules)
@@ -589,6 +590,7 @@ namespace Armor.Tui
                     policyName,
                     DescribeCron(schedule.CronExpression),
                     schedule.Enabled ? "enabled" : "disabled",
+                    schedule.LastRunUtc.HasValue ? FormatTimestamp(schedule.LastRunUtc.Value) : "—",
                     schedule.NextRunUtc.HasValue ? FormatTimestamp(schedule.NextRunUtc.Value) : "—",
                 }, schedule));
             }
