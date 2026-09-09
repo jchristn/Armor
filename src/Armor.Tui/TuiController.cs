@@ -483,7 +483,8 @@ namespace Armor.Tui
         private async Task LoadPoliciesAsync()
         {
             List<Policy> policies = await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "Name", "Type", "Retain", "Includes", "Excludes", "Enabled" }, new int[] { 5, 3, 2, 2, 2, 2 });
+            Dictionary<string, DateTime> lastSuccess = await BuildLastSuccessMapAsync().ConfigureAwait(false);
+            Content().SetColumns(new[] { "Name", "Type", "Retain", "Includes", "Excludes", "Last Success", "Enabled" }, new int[] { 5, 3, 2, 2, 2, 6, 2 });
 
             List<TableRow> rows = new List<TableRow>();
             foreach (Policy policy in policies)
@@ -495,6 +496,7 @@ namespace Armor.Tui
                     policy.RetentionDays + "d",
                     policy.IncludePaths.Count.ToString(),
                     policy.ExcludePatterns.Count.ToString(),
+                    lastSuccess.TryGetValue(policy.Id, out DateTime when) ? FormatTimestamp(when) : "—",
                     policy.Enabled ? "yes" : "no",
                 }, policy));
             }
@@ -526,7 +528,8 @@ namespace Armor.Tui
         private async Task LoadKeysAsync()
         {
             List<EncryptionKey> keys = await _Context.Database.EncryptionKeys.ReadAllAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "Name", "Protection", "Created" }, new int[] { 4, 3, 8 });
+            List<Policy> policies = await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false);
+            Content().SetColumns(new[] { "Name", "Protection", "Policies", "Created" }, new int[] { 4, 3, 2, 6 });
 
             List<TableRow> rows = new List<TableRow>();
             foreach (EncryptionKey key in keys)
@@ -537,10 +540,18 @@ namespace Armor.Tui
                 if (protection.Length == 0)
                     protection = "—";
 
+                int linked = 0;
+                foreach (Policy policy in policies)
+                {
+                    if (String.Equals(policy.EncryptionKeyId, key.Id, StringComparison.Ordinal))
+                        linked++;
+                }
+
                 rows.Add(new TableRow(new[]
                 {
                     key.Name,
                     protection,
+                    linked.ToString(),
                     FormatTimestamp(key.CreatedUtc),
                 }, key));
             }
@@ -608,6 +619,24 @@ namespace Armor.Tui
             return map;
         }
 
+        /// <summary>
+        /// Build a map of policy id to the completion time of that policy's most recent successful backup.
+        /// Derived from the backup-job history — a policy that has never completed a run is absent from the map.
+        /// </summary>
+        private async Task<Dictionary<string, DateTime>> BuildLastSuccessMapAsync()
+        {
+            List<BackupJob> jobs = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
+            Dictionary<string, DateTime> map = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+            foreach (BackupJob job in jobs)
+            {
+                if (job.Status != JobStatusEnum.Completed || !job.CompletedUtc.HasValue)
+                    continue;
+                if (!map.TryGetValue(job.PolicyId, out DateTime existing) || job.CompletedUtc.Value > existing)
+                    map[job.PolicyId] = job.CompletedUtc.Value;
+            }
+            return map;
+        }
+
         private async Task LoadRunsAsync()
         {
             List<Schedule> schedules = await _Context.Database.Schedules.ReadAllAsync().ConfigureAwait(false);
@@ -645,7 +674,28 @@ namespace Armor.Tui
                 }, schedule));
             }
 
-            Content().SetHeadings("Runs — upcoming & in progress", new[] { Hint("↑↓", "Select"), Hint("↵", "Cancel running"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
+            // Past runs, newest first — the history you can scroll through. Press Enter on one for its details.
+            List<BackupJob> jobs = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
+            int history = 0;
+            for (int i = jobs.Count - 1; i >= 0; i--)
+            {
+                BackupJob job = jobs[i];
+                if (job.Status == JobStatusEnum.Pending || job.Status == JobStatusEnum.Running)
+                    continue; // still live — already shown above as it runs
+
+                string policyName = policyNames.TryGetValue(job.PolicyId, out string? name) ? name : job.PolicyId;
+                DateTime? finished = job.CompletedUtc ?? job.StartedUtc;
+                rows.Add(new TableRow(new[]
+                {
+                    finished.HasValue ? FormatTimestamp(finished.Value) : "—",
+                    policyName,
+                    job.BackupType.ToString(),
+                    job.Status.ToString().ToLowerInvariant(),
+                }, job));
+                history++;
+            }
+
+            Content().SetHeadings("Runs — upcoming, in progress & past (" + history + ")", new[] { Hint("↑↓", "Scroll"), Hint("↵", "Details / cancel"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "Nothing running and nothing scheduled. Add a schedule under 'Schedules'.");
         }
 
@@ -1156,6 +1206,13 @@ namespace Armor.Tui
             if (_Current == Section.Recover)
             {
                 await RecoverPrimaryAsync(tag).ConfigureAwait(false);
+                return;
+            }
+
+            // In the Runs view, Enter on a past run opens its details rather than starting a restore.
+            if (_Current == Section.Runs && tag is BackupJob runJob)
+            {
+                await ShowRunDetailAsync(runJob).ConfigureAwait(false);
                 return;
             }
 
@@ -2684,6 +2741,31 @@ namespace Armor.Tui
                     ? "The password is cached on this machine, so backups run unattended."
                     : "Not cached here — you will be asked for the password when it is needed.",
                 "With the password you can restore on a fresh install of Armor.");
+        }
+
+        /// <summary>
+        /// Show a details modal for a single past run: its policy, type and outcome, when it ran and how long
+        /// it took, and the files and bytes it moved. On a failed run the error message is surfaced.
+        /// </summary>
+        private async Task ShowRunDetailAsync(BackupJob job)
+        {
+            Dictionary<string, string> policyNames = await BuildPolicyNameMapAsync().ConfigureAwait(false);
+            string policyName = policyNames.TryGetValue(job.PolicyId, out string? name) ? name : job.PolicyId;
+
+            List<string> lines = new List<string>();
+            lines.Add(policyName + " · " + job.BackupType + " · " + job.Status.ToString().ToLowerInvariant());
+            lines.Add("Started " + (job.StartedUtc.HasValue ? FormatTimestamp(job.StartedUtc.Value) : "—"));
+            lines.Add("Finished " + (job.CompletedUtc.HasValue ? FormatTimestamp(job.CompletedUtc.Value) : "—"));
+            if (job.StartedUtc.HasValue && job.CompletedUtc.HasValue)
+                lines.Add("Duration " + FormatDuration(job.CompletedUtc.Value - job.StartedUtc.Value));
+            lines.Add("Files " + job.FileCount + " · " + FormatBytes(job.BytesTotal) + " scanned");
+            lines.Add("Written " + FormatBytes(job.BytesWritten) + " · deduplicated " + FormatBytes(job.BytesDeduplicated));
+            if (job.SkippedFiles > 0)
+                lines.Add("Skipped " + job.SkippedFiles + " files (" + FormatBytes(job.SkippedBytes) + ")");
+            if (!String.IsNullOrWhiteSpace(job.Error))
+                lines.Add("Error: " + job.Error);
+
+            await NotifyAsync("Run details", lines.ToArray()).ConfigureAwait(false);
         }
 
         private async Task ExportSelfBackupAsync()
