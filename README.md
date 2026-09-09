@@ -120,7 +120,7 @@ lists every key.
    any time to manage the shared list itself.
 4. **Policies** — press <kbd>Enter</kbd> to run a backup now; a progress bar tracks it and the
    activity log reports how many chunks it wrote versus reused. Each run is a restore point.
-5. **Runs** — the timeline of what is running now, what is scheduled next, and every past run you
+5. **Backup jobs** — the timeline of what is running now, what is scheduled next, and every past run you
    can scroll back through. Press <kbd>Enter</kbd> on a past run for its details, or <kbd>r</kbd>
    to restore from it (or <kbd>r</kbd> on a policy to pick among its points) and choose where to
    write. Restoring to a blank destination rebuilds the original tree there; the restore shows a
@@ -150,7 +150,7 @@ gap at the worst possible moment:
    what the global list excludes today and additional rules worth considering.
 
 2. **Always review your first backup.** After the first run of a new policy, open its restore
-   points (**Runs**, or <kbd>r</kbd> on the policy) and browse the captured tree. Confirm
+   points (**Backup jobs**, or <kbd>r</kbd> on the policy) and browse the captured tree. Confirm
    the folders and files you meant to protect are there — that a global or per-policy exclude
    didn't quietly keep out something you actually wanted. The run-statistics line in the activity
    log ("Files backed up") is a quick sanity check on the count; browsing the tree is the real one.

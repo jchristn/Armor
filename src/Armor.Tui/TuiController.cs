@@ -307,7 +307,7 @@ namespace Armor.Tui
                 new TableRow(new[] { "2 Passwords" }, Section.Keys),
                 new TableRow(new[] { "3 Policies" }, Section.Policies),
                 new TableRow(new[] { "4 Schedules" }, Section.Schedules),
-                new TableRow(new[] { "Runs" }, Section.Runs),
+                new TableRow(new[] { "Backup jobs" }, Section.Runs),
                 new TableRow(new[] { "Recover" }, Section.Recover),
             };
             Nav().SetRows(rows, "No sections.");
@@ -666,7 +666,7 @@ namespace Armor.Tui
                 history++;
             }
 
-            Content().SetHeadings("Runs — upcoming, in progress & past (" + history + ")", new[] { Hint("↑↓", "Scroll"), Hint("↵", "Details / cancel"), Hint("r", "Restore"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
+            Content().SetHeadings("Backup jobs — upcoming, in progress & past (" + history + ")", new[] { Hint("↑↓", "Scroll"), Hint("↵", "Details / cancel"), Hint("r", "Restore"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "Nothing running and nothing scheduled. Add a schedule under 'Schedules'.");
         }
 
@@ -691,7 +691,7 @@ namespace Armor.Tui
 
             if (_Current != Section.Policies)
             {
-                await NotifyAsync("Restore points", "Select a policy under 'Policies', or a past run under 'Runs', then press 'r'.").ConfigureAwait(false);
+                await NotifyAsync("Restore points", "Select a policy under 'Policies', or a past run under 'Backup jobs', then press 'r'.").ConfigureAwait(false);
                 return;
             }
             if (!(Content().SelectedTag is Policy policy))
@@ -2782,13 +2782,13 @@ namespace Armor.Tui
                 HelpRow("c/INS", "Create a new item"),
                 HelpRow("e/F2", "Edit the selected policy, target, schedule, or password"),
                 HelpRow("d/DEL", "Delete the selected item"),
-                HelpRow("r", "Restore: pick a point for the selected policy, or restore the selected run in 'Runs'"),
+                HelpRow("r", "Restore: pick a point for the selected policy, or restore the selected run in 'Backup jobs'"),
                 HelpRow("F5", "Refresh the current section"),
                 HelpRow("s", "Show backup statistics"),
                 HelpRow("g", "Manage the shared global exclude list"),
                 HelpRow("x", "Export a self-backup"),
                 HelpRow("", ""),
-                HelpRow("Cancel a run", "In 'Runs' press ENTER on it, or TAB to the status area"),
+                HelpRow("Cancel a run", "In 'Backup jobs' press ENTER on it, or TAB to the status area"),
                 HelpRow("Status area", "TAB to it, ↑/↓ to pick a running backup, ENTER to cancel it"),
                 HelpRow("Activity log", "TAB to it; ↑/↓ PgUp/PgDn scroll; c copy all; x clear"),
                 HelpRow("", ""),

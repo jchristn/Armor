@@ -77,14 +77,14 @@ setup checklist:
 2 Passwords           – the encryption password(s) that protect your data
 3 Policies            – what to back up, where, and how
 4 Schedules           – when to run automatically
-Runs                  – in progress, upcoming, and every past run you can restore
+Backup jobs           – in progress, upcoming, and every past run you can restore
 Recover               – restore from a target using only its location + password
 ```
 
 Move the highlight with **↑/↓**. **Tab** (or **Enter** on a nav item) jumps into the
 table; **Esc** returns to the nav. In a table, **Enter** runs that section's main action
 (back up, validate, restore, enable/disable), **c** creates, **d** deletes, **r** restores
-(a policy's restore points, or the selected run in **Runs**), **F5** refreshes, and **F1**
+(a policy's restore points, or the selected run in **Backup jobs**), **F5** refreshes, and **F1**
 shows all shortcuts. When Armor asks
 a question it opens a small dialog — type and press **Enter**, or **Escape** to cancel.
 Press **Ctrl+Q** to quit.
@@ -127,7 +127,7 @@ Now, in the TUI, follow the numbered nav sections top to bottom:
    wrote versus reused — because `notes-copy.txt` is identical to `notes.txt`, you'll see
    reuse on the second file.
 
-You can confirm the run under **Runs**: scroll down to the past runs and the job shows as
+You can confirm the run under **Backup jobs**: scroll down to the past runs and the job shows as
 `completed`. It is now a restore point — press **Enter** on it for its details.
 
 ## A basic restore
@@ -136,7 +136,7 @@ Restoring reads one manifest and rebuilds the files, checking every chunk agains
 content hash on the way out. We'll restore to a fresh folder so you can compare against
 the original.
 
-1. **Runs → `r`.** Scroll down to the past runs, highlight the point-in-time you just created
+1. **Backup jobs → `r`.** Scroll down to the past runs, highlight the point-in-time you just created
    (rows show when, which policy, type, and status), and press **r** to restore from it. Press
    **Enter** instead for its details. To browse just one policy's points, select the policy
    under **Policies** and press **r**.
@@ -198,7 +198,7 @@ from the cached password and runs the backup — no key file, no prompt.
 Create a schedule under **Schedules → `c`**: pick a policy, then answer a plain-English
 frequency form (every N minutes/hours, every day, certain weekdays, a day of the month, or
 an advanced raw cron) and a time of day. Armor builds the cron expression for you; the
-**Schedules** and **Runs** views show the schedule in plain English and the next run time.
+**Schedules** and **Backup jobs** views show the schedule in plain English and the next run time.
 All times are UTC.
 
 Policies whose password isn't cached on a machine are simply left for the next tick, so
