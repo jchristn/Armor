@@ -41,8 +41,7 @@ namespace Armor.Tui
             Policies = 2,
             Schedules = 3,
             Runs = 4,
-            Jobs = 5,
-            Recover = 6,
+            Recover = 5,
         }
 
         // Sentinel tag for the "back to locations" row shown while browsing a recovery catalog.
@@ -289,7 +288,7 @@ namespace Armor.Tui
             app.Bind("insert", () => Launch(CreateInCurrentSectionAsync));
             app.Bind("delete", () => Launch(DeleteSelectedAsync));
             app.Bind("f2", () => Launch(EditSelectedAsync));
-            app.Bind("r", () => Launch(RestorePointsForSelectedPolicyAsync));
+            app.Bind("r", () => Launch(RestoreFromSelectionAsync));
             app.Bind("f5", () => Launch(LoadCurrentSectionAsync));
             app.Bind("f1", () => Launch(ShowHelpAsync));
             app.Bind("x", () => Launch(ExportSelfBackupAsync));
@@ -309,7 +308,6 @@ namespace Armor.Tui
                 new TableRow(new[] { "3 Policies" }, Section.Policies),
                 new TableRow(new[] { "4 Schedules" }, Section.Schedules),
                 new TableRow(new[] { "Runs" }, Section.Runs),
-                new TableRow(new[] { "Backup jobs" }, Section.Jobs),
                 new TableRow(new[] { "Recover" }, Section.Recover),
             };
             Nav().SetRows(rows, "No sections.");
@@ -473,7 +471,6 @@ namespace Armor.Tui
                 case Section.Policies: await LoadPoliciesAsync().ConfigureAwait(false); break;
                 case Section.Targets: await LoadTargetsAsync().ConfigureAwait(false); break;
                 case Section.Keys: await LoadKeysAsync().ConfigureAwait(false); break;
-                case Section.Jobs: await LoadJobsAsync().ConfigureAwait(false); break;
                 case Section.Schedules: await LoadSchedulesAsync().ConfigureAwait(false); break;
                 case Section.Runs: await LoadRunsAsync().ConfigureAwait(false); break;
                 case Section.Recover: await LoadRecoverAsync().ConfigureAwait(false); break;
@@ -558,32 +555,6 @@ namespace Armor.Tui
 
             Content().SetHeadings("Encryption passwords (" + keys.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Details"), Hint("c", "Create"), Hint("e", "Rename"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "No encryption passwords yet. Press 'c' to create one.");
-        }
-
-        private async Task LoadJobsAsync()
-        {
-            List<BackupJob> jobs = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
-            Dictionary<string, string> policyNames = await BuildPolicyNameMapAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "When", "Policy", "Type", "Status", "Files" }, new int[] { 9, 3, 2, 2, 2 });
-
-            List<TableRow> rows = new List<TableRow>();
-            // Newest first — these are the point-in-time restore points.
-            jobs.Reverse();
-            foreach (BackupJob job in jobs)
-            {
-                string policyName = policyNames.TryGetValue(job.PolicyId, out string? name) ? name : job.PolicyId;
-                rows.Add(new TableRow(new[]
-                {
-                    job.CompletedUtc.HasValue ? FormatTimestamp(job.CompletedUtc.Value) : "(running)",
-                    policyName,
-                    job.BackupType.ToString(),
-                    job.Status.ToString(),
-                    job.FileCount.ToString(),
-                }, job));
-            }
-
-            Content().SetHeadings("Backup jobs — restore points (" + jobs.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Restore"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
-            Content().SetRows(rows, "No backups have run yet. Run a policy from 'Policies' to create a restore point.");
         }
 
         private async Task LoadSchedulesAsync()
@@ -695,15 +666,32 @@ namespace Armor.Tui
                 history++;
             }
 
-            Content().SetHeadings("Runs — upcoming, in progress & past (" + history + ")", new[] { Hint("↑↓", "Scroll"), Hint("↵", "Details / cancel"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
+            Content().SetHeadings("Runs — upcoming, in progress & past (" + history + ")", new[] { Hint("↑↓", "Scroll"), Hint("↵", "Details / cancel"), Hint("r", "Restore"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
             Content().SetRows(rows, "Nothing running and nothing scheduled. Add a schedule under 'Schedules'.");
         }
 
-        private async Task RestorePointsForSelectedPolicyAsync()
+        private async Task RestoreFromSelectionAsync()
         {
+            // In the Runs view, 'r' restores directly from the highlighted past run.
+            if (_Current == Section.Runs)
+            {
+                if (!(Content().SelectedTag is BackupJob run))
+                {
+                    await NotifyAsync("Restore", "Select a past run in the list, then press 'r'.").ConfigureAwait(false);
+                    return;
+                }
+                if (String.IsNullOrEmpty(run.ManifestKey))
+                {
+                    await NotifyAsync("No restore point", "This run has no restore point — it did not complete a manifest.", "Only completed runs can be restored.").ConfigureAwait(false);
+                    return;
+                }
+                await RestoreAsync(run).ConfigureAwait(false);
+                return;
+            }
+
             if (_Current != Section.Policies)
             {
-                await NotifyAsync("Restore points", "Select a policy under 'Policies' first, then press 'r'.").ConfigureAwait(false);
+                await NotifyAsync("Restore points", "Select a policy under 'Policies', or a past run under 'Runs', then press 'r'.").ConfigureAwait(false);
                 return;
             }
             if (!(Content().SelectedTag is Policy policy))
@@ -2437,7 +2425,7 @@ namespace Armor.Tui
                         SetStatus(summary);
                         LogBackupStatistics(stats);
                         ShowBackupResultModal("Backup complete", policyName, summary, stats);
-                        if (_Current == Section.Jobs || _Current == Section.Runs)
+                        if (_Current == Section.Runs)
                             Launch(LoadCurrentSectionAsync);
                     });
                 }
@@ -2447,7 +2435,7 @@ namespace Armor.Tui
                     {
                         FinishJob(entry);
                         SetStatus("Backup of '" + policyName + "' canceled.");
-                        if (_Current == Section.Jobs || _Current == Section.Runs)
+                        if (_Current == Section.Runs)
                             Launch(LoadCurrentSectionAsync);
                     });
                 }
@@ -2470,7 +2458,7 @@ namespace Armor.Tui
                         FinishJob(entry);
                         SetStatus("Backup of '" + policyName + "' failed: " + ex.Message);
                         ShowBackupResultModal("Backup failed", policyName, "The backup did not finish.", new List<string> { ex.Message });
-                        if (_Current == Section.Jobs || _Current == Section.Runs)
+                        if (_Current == Section.Runs)
                             Launch(LoadCurrentSectionAsync);
                     });
                 }
@@ -2764,6 +2752,8 @@ namespace Armor.Tui
                 lines.Add("Skipped " + job.SkippedFiles + " files (" + FormatBytes(job.SkippedBytes) + ")");
             if (!String.IsNullOrWhiteSpace(job.Error))
                 lines.Add("Error: " + job.Error);
+            if (!String.IsNullOrEmpty(job.ManifestKey))
+                lines.Add("Press 'r' to restore from this run.");
 
             await NotifyAsync("Run details", lines.ToArray()).ConfigureAwait(false);
         }
@@ -2792,7 +2782,7 @@ namespace Armor.Tui
                 HelpRow("c/INS", "Create a new item"),
                 HelpRow("e/F2", "Edit the selected policy, target, schedule, or password"),
                 HelpRow("d/DEL", "Delete the selected item"),
-                HelpRow("r", "Restore points for the selected policy"),
+                HelpRow("r", "Restore: pick a point for the selected policy, or restore the selected run in 'Runs'"),
                 HelpRow("F5", "Refresh the current section"),
                 HelpRow("s", "Show backup statistics"),
                 HelpRow("g", "Manage the shared global exclude list"),

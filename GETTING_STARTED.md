@@ -77,15 +77,15 @@ setup checklist:
 2 Passwords           – the encryption password(s) that protect your data
 3 Policies            – what to back up, where, and how
 4 Schedules           – when to run automatically
-Runs                  – upcoming scheduled runs and anything in progress
-Backup jobs           – every point-in-time you can restore
+Runs                  – in progress, upcoming, and every past run you can restore
 Recover               – restore from a target using only its location + password
 ```
 
 Move the highlight with **↑/↓**. **Tab** (or **Enter** on a nav item) jumps into the
 table; **Esc** returns to the nav. In a table, **Enter** runs that section's main action
-(back up, validate, restore, enable/disable), **c** creates, **d** deletes, **r** shows a
-policy's restore points, **F5** refreshes, and **F1** shows all shortcuts. When Armor asks
+(back up, validate, restore, enable/disable), **c** creates, **d** deletes, **r** restores
+(a policy's restore points, or the selected run in **Runs**), **F5** refreshes, and **F1**
+shows all shortcuts. When Armor asks
 a question it opens a small dialog — type and press **Enter**, or **Escape** to cancel.
 Press **Ctrl+Q** to quit.
 
@@ -127,8 +127,8 @@ Now, in the TUI, follow the numbered nav sections top to bottom:
    wrote versus reused — because `notes-copy.txt` is identical to `notes.txt`, you'll see
    reuse on the second file.
 
-You can confirm the run under **Backup jobs**: the job shows as `Completed`. It is now a
-restore point.
+You can confirm the run under **Runs**: scroll down to the past runs and the job shows as
+`completed`. It is now a restore point — press **Enter** on it for its details.
 
 ## A basic restore
 
@@ -136,9 +136,10 @@ Restoring reads one manifest and rebuilds the files, checking every chunk agains
 content hash on the way out. We'll restore to a fresh folder so you can compare against
 the original.
 
-1. **Backup jobs → Enter.** Pick the point-in-time you just created (rows show when, which
-   policy, type, status, and file count) and press **Enter**. To browse just one policy's
-   points instead, select the policy under **Policies** and press **r**.
+1. **Runs → `r`.** Scroll down to the past runs, highlight the point-in-time you just created
+   (rows show when, which policy, type, and status), and press **r** to restore from it. Press
+   **Enter** instead for its details. To browse just one policy's points, select the policy
+   under **Policies** and press **r**.
 
 2. If the password isn't already cached on this machine, Armor asks for it so it can unlock
    the data. (After a normal setup it's cached, so it won't ask.)
