@@ -29,6 +29,13 @@ namespace Armor.Tui.Widgets
         private int _LinkWidth;
 
         /// <summary>
+        /// An optional predicate consulted before acting on a mouse event; when it returns true the event is
+        /// ignored. The shell sets this to "is a modal open" so a click on a modal does not open the link
+        /// behind it.
+        /// </summary>
+        public Func<bool>? MouseBlocked { get; set; }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="HeaderBanner"/> class.
         /// </summary>
         /// <param name="logoRows">The pre-rendered ASCII-art wordmark rows. Cannot be null.</param>
@@ -108,6 +115,8 @@ namespace Armor.Tui.Widgets
         {
             if (mouse == null)
                 throw new ArgumentNullException(nameof(mouse));
+            if (MouseBlocked?.Invoke() == true)
+                return false;
 
             // A left click on the drawn link text opens the project URL in the browser.
             if (mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left

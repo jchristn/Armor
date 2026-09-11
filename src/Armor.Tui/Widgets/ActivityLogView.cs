@@ -30,6 +30,13 @@ namespace Armor.Tui.Widgets
         private bool _Focused;
 
         /// <summary>
+        /// An optional predicate the widget consults before acting on a mouse event; when it returns true
+        /// the event is ignored. The shell sets this to "is a modal open" so a click on a modal does not
+        /// leak through to this pane behind it.
+        /// </summary>
+        public Func<bool>? MouseBlocked { get; set; }
+
+        /// <summary>
         /// Raised when the view wants the host to surface a short message (for example the result of a copy
         /// or clear). The host typically writes it back into the log via its status line.
         /// </summary>
@@ -73,6 +80,8 @@ namespace Armor.Tui.Widgets
         {
             if (mouse == null)
                 throw new ArgumentNullException(nameof(mouse));
+            if (MouseBlocked?.Invoke() == true)
+                return false;
 
             // The wheel scrolls the scrollback: up walks toward older lines (a larger from-bottom offset),
             // down back toward the newest. Three lines per notch matches the rest of the shell.

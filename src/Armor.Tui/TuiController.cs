@@ -270,6 +270,17 @@ namespace Armor.Tui
             // scroll/copy/clear shortcuts become available.
             app.Bind("log", _Log);
 
+            // The host keeps background panes hit-testable beneath a modal (its per-frame hit map is built
+            // from the layout, not the modal), and mouse dispatch — unlike key dispatch — does not trap on an
+            // open modal. So teach every mouse-aware pane to ignore the mouse while a modal is up, otherwise a
+            // click on a dialog would leak through to the pane behind it.
+            Func<bool> modalOpen = () => app.Modals.IsActive;
+            _Nav.MouseBlocked = modalOpen;
+            _Content.MouseBlocked = modalOpen;
+            _JobView.MouseBlocked = modalOpen;
+            _Log.MouseBlocked = modalOpen;
+            header.MouseBlocked = modalOpen;
+
             // Mirror file-log messages (backup lifecycle, warnings, errors) into the on-screen log pane.
             Armor.Core.Diagnostics.ArmorLog.MessageLogged += OnLogMessage;
 

@@ -73,6 +73,13 @@ namespace Armor.Tui.Widgets
         private const byte DimColor = 8;         // gray
 
         /// <summary>
+        /// An optional predicate the widget consults before acting on a mouse event; when it returns true
+        /// the event is ignored. The host keeps background panes hit-testable beneath a modal, so the shell
+        /// sets this to "is a modal open" to stop a click on the modal from leaking through to the pane.
+        /// </summary>
+        public Func<bool>? MouseBlocked { get; set; }
+
+        /// <summary>
         /// Raised after the selected row changes (by key or by <see cref="SetRows"/>).
         /// </summary>
         public event Action? SelectionChanged;
@@ -218,6 +225,8 @@ namespace Armor.Tui.Widgets
         {
             if (mouse == null)
                 throw new ArgumentNullException(nameof(mouse));
+            if (MouseBlocked?.Invoke() == true)
+                return false;
 
             // Wheel scrolls the selection the same way the arrow keys do (the view keeps the selected row
             // in view, so it has no scroll offset independent of the selection). Three rows per notch is the

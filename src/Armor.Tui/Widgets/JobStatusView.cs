@@ -99,6 +99,13 @@ namespace Armor.Tui.Widgets
         private bool _Focused;
 
         /// <summary>
+        /// An optional predicate the widget consults before acting on a mouse event; when it returns true
+        /// the event is ignored. The shell sets this to "is a modal open" so a click on a modal does not
+        /// leak through to this pane behind it.
+        /// </summary>
+        public Func<bool>? MouseBlocked { get; set; }
+
+        /// <summary>
         /// Raised with the selected job's id when the user presses Enter to manage it.
         /// </summary>
         public event Action<string>? Activated;
@@ -138,6 +145,8 @@ namespace Armor.Tui.Widgets
         {
             if (mouse == null)
                 throw new ArgumentNullException(nameof(mouse));
+            if (MouseBlocked?.Invoke() == true)
+                return false;
             if (_Jobs.Count == 0)
                 return false;
 
