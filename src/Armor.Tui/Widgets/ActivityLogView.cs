@@ -17,7 +17,7 @@ namespace Armor.Tui.Widgets
     /// New lines auto-follow only while the view is already at the bottom, so scrolling back to read is not
     /// yanked away by fresh output.
     /// </summary>
-    public sealed class ActivityLogView : IWidget, IFocusable, IFocusAware
+    public sealed class ActivityLogView : IWidget, IFocusable, IFocusAware, IMouseAware
     {
         private const int MaxLines = 5000;
         private const byte DimColor = 8;
@@ -66,6 +66,31 @@ namespace Armor.Tui.Widgets
         public Size Measure(Size available)
         {
             return available;
+        }
+
+        /// <inheritdoc/>
+        public bool HandleMouse(MouseEvent mouse)
+        {
+            if (mouse == null)
+                throw new ArgumentNullException(nameof(mouse));
+
+            // The wheel scrolls the scrollback: up walks toward older lines (a larger from-bottom offset),
+            // down back toward the newest. Three lines per notch matches the rest of the shell.
+            if (mouse.Kind == MouseEventKind.Wheel)
+            {
+                if (mouse.Button == MouseButton.WheelUp)
+                {
+                    Scroll(3);
+                    return true;
+                }
+                if (mouse.Button == MouseButton.WheelDown)
+                {
+                    Scroll(-3);
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <inheritdoc/>

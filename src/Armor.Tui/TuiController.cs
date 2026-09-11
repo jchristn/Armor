@@ -17,6 +17,7 @@ namespace Armor.Tui
     using TUIKit;
     using TUIKit.Content;
     using TUIKit.Hosting;
+    using TUIKit.Input;
     using TUIKit.Layout;
     using TUIKit.Modals;
     using TUIKit.Theming;
@@ -294,6 +295,10 @@ namespace Armor.Tui
             app.Bind("x", () => Launch(ExportSelfBackupAsync));
             app.Bind("s", () => Launch(ShowStatisticsAsync));
             app.Bind("g", () => Launch(ManageGlobalExcludesAsync));
+            // Mouse routing is on by default (click to focus and select, double-click to act, wheel to
+            // scroll). F8 hands the mouse back to the terminal so its native click-drag text selection works,
+            // and toggles it back on.
+            app.Bind("f8", ToggleMouseCapture);
 
             SetStatus("Armor started. Choose a section on the left; press F1 for help.");
             _ = StartAsync();
@@ -324,7 +329,7 @@ namespace Armor.Tui
                         ? assemblyVersion.Major + "." + assemblyVersion.Minor + "." + assemblyVersion.Build
                         : "0.1.0";
                     ArmorSplashModal splash = new ArmorSplashModal("Armor", ArmorBanner.SplashLines(version));
-                    await App().ShowAsync(splash).ConfigureAwait(false);
+                    await ShowSplashWithClickableLinksAsync(splash).ConfigureAwait(false);
                 }
 
                 App().Focus("nav");
@@ -334,6 +339,53 @@ namespace Armor.Tui
             catch (Exception ex)
             {
                 SetStatus("Fatal: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Show the startup splash with its URLs clickable. The splash is a modal, and the framework's Modal
+        /// base has no mouse hook, so for the life of the splash this turns off widget mouse-routing — which
+        /// sends every mouse event to <see cref="TuiApplication.MouseReceived"/> instead of the panes behind
+        /// the modal — and hit-tests each click against the link rectangles the splash registers as it draws.
+        /// A left click on a URL opens it in the browser; the splash stays open (only a key dismisses it), so
+        /// the link can be clicked and the splash read at leisure. Routing is restored when the splash closes.
+        /// </summary>
+        /// <param name="splash">The splash modal to show. Cannot be null.</param>
+        private async Task ShowSplashWithClickableLinksAsync(ArmorSplashModal splash)
+        {
+            TuiApplication app = App();
+            LinkRegistry registry = new LinkRegistry();
+            splash.Links = registry;
+            app.Links = registry;
+
+            bool previousRouting = app.EnableMouseRouting;
+            app.EnableMouseRouting = false;
+
+            void OnMouse(MouseEvent mouse)
+            {
+                if (mouse.Kind != MouseEventKind.Press || mouse.Button != MouseButton.Left)
+                    return;
+
+                Link? link = registry.HitTest(mouse.X, mouse.Y);
+                if (link == null || String.IsNullOrEmpty(link.Uri))
+                    return;
+
+                SetStatus(UrlLauncher.TryOpen(link.Uri)
+                    ? "Opening " + link.Uri + " in your browser."
+                    : "Could not open " + link.Uri + " — no browser launcher was available.");
+            }
+
+            app.MouseReceived += OnMouse;
+            try
+            {
+                await app.ShowAsync(splash).ConfigureAwait(false);
+            }
+            finally
+            {
+                app.MouseReceived -= OnMouse;
+                app.Links = null;
+                app.EnableMouseRouting = previousRouting;
+                splash.Links = null;
             }
         }
 
@@ -2772,10 +2824,24 @@ namespace Armor.Tui
             await NotifyAsync("Self-backup exported", "Written to " + destination + ".").ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// Toggle whether the app captures the mouse. On, clicks focus and select rows, double-clicks act,
+        /// and the wheel scrolls; off, the mouse returns to the terminal so its own click-drag text selection
+        /// works. Reports the new state on the status line.
+        /// </summary>
+        private void ToggleMouseCapture()
+        {
+            bool enabled = App().ToggleMouseCapture();
+            SetStatus(enabled
+                ? "Mouse control on: click to select, double-click to act, wheel to scroll. F8 to release the mouse to the terminal."
+                : "Mouse released to the terminal so you can select and copy text. F8 to take mouse control back.");
+        }
+
         private Task ShowHelpAsync()
         {
             string[] lines =
             {
+                HelpRow("Mouse", "Click to focus/select, double-click to act, wheel to scroll; F8 releases the mouse to the terminal"),
                 HelpRow("↑/↓", "Move selection"),
                 HelpRow("TAB/ESC", "Move focus across the nav, workspace, status area, and activity log"),
                 HelpRow("ENTER", "Run the section action (back up / validate / restore / toggle)"),

@@ -42,7 +42,7 @@ namespace Armor.Tui.Widgets
     /// <see cref="SelectionChanged"/>, so a caller can drive a detail view live from selection. Row
     /// action keys the widget does not consume (for example "c", "d") fall through to host commands.
     /// </summary>
-    public sealed class SectionTableView : IWidget, IFocusable, IFocusAware
+    public sealed class SectionTableView : IWidget, IFocusable, IFocusAware, IMouseAware
     {
         private readonly List<TableRow> _Rows = new List<TableRow>();
         private string[] _Headers;
@@ -52,6 +52,14 @@ namespace Armor.Tui.Widgets
         private int _Selected;
         private int _ScrollTop;
         private bool _Focused;
+
+        // The body geometry captured on the last Render, so a mouse click can be mapped back to the row it
+        // landed on. HandleMouse works in the same coordinate space Render draws in, so these are the exact
+        // rectangle the rows occupied on screen; -1 body top means no body was drawn (nothing to hit).
+        private int _LastBodyTop = -1;
+        private int _LastVisibleRows;
+        private int _LastLeft;
+        private int _LastUsable;
         private string? _Title;
         private string? _Subtitle;
         private IReadOnlyList<KeyHint>? _Hints;
@@ -206,6 +214,56 @@ namespace Armor.Tui.Widgets
         }
 
         /// <inheritdoc/>
+        public bool HandleMouse(MouseEvent mouse)
+        {
+            if (mouse == null)
+                throw new ArgumentNullException(nameof(mouse));
+
+            // Wheel scrolls the selection the same way the arrow keys do (the view keeps the selected row
+            // in view, so it has no scroll offset independent of the selection). Three rows per notch is the
+            // conventional step.
+            if (mouse.Kind == MouseEventKind.Wheel)
+            {
+                if (mouse.Button == MouseButton.WheelUp)
+                    return Move(-3);
+                if (mouse.Button == MouseButton.WheelDown)
+                    return Move(3);
+                return false;
+            }
+
+            // A left press selects the row under the pointer; a double-click activates it, mirroring Enter.
+            // Requiring the second click to activate keeps a single stray click from, say, starting a backup.
+            if (mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left)
+            {
+                int row = RowAt(mouse.X, mouse.Y);
+                if (row < 0)
+                    return false;
+
+                MoveTo(row);
+                if (mouse.ClickCount >= 2 && SelectedTag != null)
+                    Activated?.Invoke(SelectedTag);
+                return true;
+            }
+
+            return false;
+        }
+
+        // Map a click in the widget's own coordinate space to the row index it landed on, or -1 when it fell
+        // outside the body drawn on the last frame (header, padding, empty area, or past the last row).
+        private int RowAt(int x, int y)
+        {
+            if (_LastBodyTop < 0 || _LastVisibleRows <= 0)
+                return -1;
+            if (y < _LastBodyTop || y >= _LastBodyTop + _LastVisibleRows)
+                return -1;
+            if (x < _LastLeft || x >= _LastLeft + _LastUsable)
+                return -1;
+
+            int row = _ScrollTop + (y - _LastBodyTop);
+            return row >= 0 && row < _Rows.Count ? row : -1;
+        }
+
+        /// <inheritdoc/>
         public Size Measure(Size available)
         {
             return available;
@@ -219,6 +277,8 @@ namespace Armor.Tui.Widgets
 
             int width = surface.Size.Width;
             int height = surface.Size.Height;
+            // Nothing hittable until a body is actually laid out below; any early return leaves it this way.
+            _LastBodyTop = -1;
             if (width <= 0 || height <= 0)
                 return;
 
@@ -238,6 +298,9 @@ namespace Armor.Tui.Widgets
             int floor = height - inset; // exclusive bottom of the content area
             if (usable <= 0 || inset >= floor)
                 return;
+
+            _LastLeft = left;
+            _LastUsable = usable;
 
             int[] widths = ComputeWidths(usable);
             int y = inset;
@@ -278,6 +341,9 @@ namespace Armor.Tui.Widgets
             int visibleRows = floor - bodyTop;
             if (visibleRows <= 0)
                 return;
+
+            _LastBodyTop = bodyTop;
+            _LastVisibleRows = visibleRows;
 
             if (_Rows.Count == 0)
             {

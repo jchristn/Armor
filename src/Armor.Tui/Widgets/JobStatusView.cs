@@ -87,7 +87,7 @@ namespace Armor.Tui.Widgets
     /// step through the running jobs; Enter raises <see cref="Activated"/> so the host can offer to cancel
     /// the selected job. Keys it does not use fall through so Tab and Escape still traverse the shell.
     /// </summary>
-    public sealed class JobStatusView : IWidget, IFocusable, IFocusAware
+    public sealed class JobStatusView : IWidget, IFocusable, IFocusAware, IMouseAware
     {
         private const int BarWidth = 30;
         private const byte TitleColor = 6;
@@ -131,6 +131,43 @@ namespace Armor.Tui.Widgets
         public Size Measure(Size available)
         {
             return available;
+        }
+
+        /// <inheritdoc/>
+        public bool HandleMouse(MouseEvent mouse)
+        {
+            if (mouse == null)
+                throw new ArgumentNullException(nameof(mouse));
+            if (_Jobs.Count == 0)
+                return false;
+
+            // Only one job's rectangle is shown at a time, so the wheel steps through the running jobs the
+            // same way Up/Down does rather than mapping a click position to a job.
+            if (mouse.Kind == MouseEventKind.Wheel)
+            {
+                if (mouse.Button == MouseButton.WheelUp)
+                {
+                    Move(-1);
+                    return true;
+                }
+                if (mouse.Button == MouseButton.WheelDown)
+                {
+                    Move(1);
+                    return true;
+                }
+                return false;
+            }
+
+            // A double-click anywhere on the rectangle manages the shown job, mirroring Enter; a single
+            // click just brings focus here (the host handles click-to-focus).
+            if (mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left)
+            {
+                if (mouse.ClickCount >= 2 && _Selected >= 0 && _Selected < _Jobs.Count)
+                    Activated?.Invoke(_Jobs[_Selected].Id);
+                return true;
+            }
+
+            return false;
         }
 
         /// <inheritdoc/>

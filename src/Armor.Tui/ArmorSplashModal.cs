@@ -10,17 +10,29 @@ namespace Armor.Tui
     /// <summary>
     /// A modal that renders multi-line content verbatim (no reflow) in a centered bordered box, with an
     /// optional dimmed hint line at the bottom. Used for the startup splash. Any key dismisses it, so it
-    /// never blocks the user from reaching the menu.
+    /// never blocks the user from reaching the menu. Any http/https URL in the content is drawn as an
+    /// underlined link and, when a <see cref="Links"/> registry is assigned, registered as a clickable hit
+    /// region so the host can open it in the browser.
     /// </summary>
     public sealed class ArmorSplashModal : Modal
     {
         private const int PadX = 3;
         private const int PadY = 1;
+        private const byte LinkColor = 6;
+
+        private static readonly LinkScanner UrlScanner = new LinkScanner();
 
         private readonly string _Title;
         private readonly IReadOnlyList<string> _Lines;
         private readonly string _Hint;
         private readonly bool _Centered;
+
+        /// <summary>
+        /// An optional link registry the modal rebuilds each frame with the on-screen rectangle of every
+        /// http/https URL in its content, so the host can hit-test a click against it and open the URL.
+        /// Null (the default) disables clickable links; the URLs are still drawn as underlined text.
+        /// </summary>
+        public LinkRegistry? Links { get; set; }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ArmorSplashModal"/> class.
@@ -86,12 +98,16 @@ namespace Armor.Tui
             int firstRow = boxY + 1 + PadY;
             int lastContentRow = boxY + boxHeight - 2 - PadY;
 
+            // The link registry is rebuilt from scratch every frame so it always reflects the current
+            // layout (the box re-centers on resize) and holds no links scrolled or resized off screen.
+            Links?.Clear();
+
             for (int i = 0; i < _Lines.Count; i++)
             {
                 int row = firstRow + i;
                 if (row > lastContentRow)
                     break;
-                surface.DrawText(LineX(contentX, contentWidth, _Lines[i]), row, _Lines[i], CellStyle.Default);
+                DrawContentLine(surface, LineX(contentX, contentWidth, _Lines[i]), row, _Lines[i]);
             }
 
             if (_Hint.Length > 0)
@@ -99,6 +115,26 @@ namespace Armor.Tui
                 int hintRow = lastContentRow;
                 if (hintRow > firstRow + _Lines.Count - 1)
                     surface.DrawText(LineX(contentX, contentWidth, _Hint), hintRow, _Hint, CellStyle.Default.WithForeground(Color.FromPalette(8)));
+            }
+        }
+
+        // Draw one content line, drawing any http/https URLs it contains as underlined link text (and, when
+        // a registry is present, registering their on-screen rectangle so a click can open them). URLs are
+        // ASCII, so a character index within the line is also its column offset from the line's start.
+        private void DrawContentLine(ISurface surface, int lineX, int row, string line)
+        {
+            surface.DrawText(lineX, row, line, CellStyle.Default);
+
+            IReadOnlyList<LinkMatch> matches = UrlScanner.Scan(line);
+            if (matches.Count == 0)
+                return;
+
+            CellStyle linkStyle = CellStyle.Default.WithForeground(Color.FromPalette(LinkColor)).WithAttribute(CellAttributes.Underline, true);
+            foreach (LinkMatch match in matches)
+            {
+                int linkX = lineX + match.Start;
+                surface.DrawText(linkX, row, match.Uri, linkStyle);
+                Links?.Add(match.Uri, new Rect(linkX, row, match.Length, 1), match.Uri, null, null);
             }
         }
 

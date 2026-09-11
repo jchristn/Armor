@@ -2,14 +2,16 @@ namespace Armor.Tui.Widgets
 {
     using System;
     using TUIKit;
+    using TUIKit.Input;
     using TUIKit.Widgets;
 
     /// <summary>
     /// The top banner: the product's ASCII-art wordmark on the left and, to its right, the tagline on
     /// the middle row followed by the project link. No border or background is drawn — only the
-    /// colored wordmark and text over the terminal's own background.
+    /// colored wordmark and text over the terminal's own background. The project link is clickable: a
+    /// left click on it opens the URL in the browser.
     /// </summary>
-    public sealed class HeaderBanner : IWidget
+    public sealed class HeaderBanner : IWidget, IMouseAware
     {
         private const byte LogoColor = 6;     // cyan
         private const byte TaglineColor = 7;  // light gray
@@ -19,6 +21,12 @@ namespace Armor.Tui.Widgets
         private readonly int _LogoWidth;
         private readonly string _Tagline;
         private readonly string _Link;
+
+        // The on-screen cell rectangle the link text occupied on the last render, so a click can be mapped
+        // back to it. Row -1 means the link was not drawn (too narrow) and so is not hittable.
+        private int _LinkRow = -1;
+        private int _LinkStartX;
+        private int _LinkWidth;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="HeaderBanner"/> class.
@@ -67,6 +75,9 @@ namespace Armor.Tui.Widgets
             CellStyle baseStyle = CellStyle.Default;
             surface.Fill(new Rect(0, 0, width, height), Cell.Blank(baseStyle));
 
+            // Nothing hittable until the link is laid out below; a narrow banner leaves it unset.
+            _LinkRow = -1;
+
             CellStyle logoStyle = baseStyle.WithForeground(Color.FromPalette(LogoColor)).WithAttribute(CellAttributes.Bold, true);
             for (int i = 0; i < _LogoRows.Length; i++)
             {
@@ -82,8 +93,31 @@ namespace Armor.Tui.Widgets
 
             int middle = (height - 1) / 2;
             surface.DrawText(textX, middle, Clip(_Tagline, available), baseStyle.WithForeground(Color.FromPalette(TaglineColor)));
-            if (middle + 1 < height)
-                surface.DrawText(textX, middle + 1, Clip(_Link, available), baseStyle.WithForeground(Color.FromPalette(LinkColor)).WithAttribute(CellAttributes.Underline, true));
+            if (middle + 1 < height && _Link.Length > 0)
+            {
+                string linkText = Clip(_Link, available);
+                surface.DrawText(textX, middle + 1, linkText, baseStyle.WithForeground(Color.FromPalette(LinkColor)).WithAttribute(CellAttributes.Underline, true));
+                _LinkRow = middle + 1;
+                _LinkStartX = textX;
+                _LinkWidth = linkText.Length;
+            }
+        }
+
+        /// <inheritdoc/>
+        public bool HandleMouse(MouseEvent mouse)
+        {
+            if (mouse == null)
+                throw new ArgumentNullException(nameof(mouse));
+
+            // A left click on the drawn link text opens the project URL in the browser.
+            if (mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left
+                && _LinkRow >= 0 && mouse.Y == _LinkRow
+                && mouse.X >= _LinkStartX && mouse.X < _LinkStartX + _LinkWidth)
+            {
+                return UrlLauncher.TryOpen(_Link);
+            }
+
+            return false;
         }
 
         private static string Clip(string value, int width)
