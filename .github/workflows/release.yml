@@ -1,0 +1,225 @@
+name: Release
+
+# Full installer + package-manager pipeline. On a v* tag this fans out to native OS runners that
+# each build, sign, and upload the artifacts they own; then a release job publishes a GitHub Release
+# with SHA256SUMS; then downstream jobs publish the apt/yum repos to GitHub Pages and generate/submit
+# the package-manager entries. publisher.json is the source of truth; src/Armor.Publisher does the work.
+#
+# VERSION: the Publisher takes the version from <Version> in src/Directory.Build.props, and asset URLs
+# are built as v<version>. Bump that version and tag the release v<version> to match (e.g. Version
+# 0.3.0 -> tag v0.3.0) so package-manager download URLs resolve to the Release assets.
+#
+# Signing is driven by the manifest's signing block. Each OS materializes its secret into the env var
+# the manifest names (vaultRef/passwordRef/notarizeProfileRef); when signing.<os>.isConfigured is
+# false the Publisher skips signing and everything still builds (unsigned). Flip isConfigured to true
+# once the secrets below exist.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSIONS: |
+    8.0.x
+    10.0.x
+
+jobs:
+  # ---- Downloadable installers, one job per native OS ----------------------------------------
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "${{ env.DOTNET_VERSIONS }}" }
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Materialize Windows signing cert (if configured)
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX_B64: ${{ secrets.WINDOWS_CERT_PFX }}
+        run: |
+          if ($env:WINDOWS_CERT_PFX_B64) {
+            $path = "$env:RUNNER_TEMP\armor-cert.pfx"
+            [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_B64))
+            "WINDOWS_CERT_PFX=$path" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+      - name: Build Windows installer
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: dotnet run --project src/Armor.Publisher -c Release -- --channel inno --output artifacts
+      - uses: actions/upload-artifact@v4
+        with: { name: installers-windows, path: "artifacts/*.exe*", if-no-files-found: error }
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "${{ env.DOTNET_VERSIONS }}" }
+      # If configured: import the Developer ID cert and store a notarytool profile named by
+      # signing.macOs.notarizeProfileRef. Left as documentation until secrets exist.
+      - name: Build macOS dmg + pkg
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_NOTARY_PROFILE: ${{ secrets.APPLE_NOTARY_PROFILE }}
+        run: dotnet run --project src/Armor.Publisher -c Release -- --channel dmg --output artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-macos
+          path: |
+            artifacts/*.dmg*
+            artifacts/*.pkg*
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "${{ env.DOTNET_VERSIONS }}" }
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rpm
+          sudo gem install --no-document fpm
+          curl -fsSL -o /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /usr/local/bin/appimagetool
+      - name: Build .deb / .rpm
+        run: dotnet run --project src/Armor.Publisher -c Release -- --channel debrpm --output artifacts
+      - name: Build AppImage
+        run: dotnet run --project src/Armor.Publisher -c Release -- --channel appimage --output artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-linux
+          path: |
+            artifacts/*.deb*
+            artifacts/*.rpm*
+            artifacts/*.AppImage*
+          if-no-files-found: error
+
+  # ---- Release: gather everything, checksum, publish -----------------------------------------
+
+  release:
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Stage assets and compute SHA256SUMS
+        id: ver
+        run: |
+          mkdir -p artifacts
+          find dl -type f ! -name '*.sha256' -exec cp {} artifacts/ \;
+          cd artifacts && sha256sum * > SHA256SUMS
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+
+  # ---- apt / yum repositories published to GitHub Pages --------------------------------------
+
+  linux-repos:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "${{ env.DOTNET_VERSIONS }}" }
+      - name: Install repo tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg
+      - uses: actions/download-artifact@v4
+        with: { name: installers-linux, path: artifacts }
+      - name: Import GPG key (if configured)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: if [ -n "$GPG_PRIVATE_KEY" ]; then echo "$GPG_PRIVATE_KEY" | gpg --batch --import; fi
+      - name: Build signed apt/yum metadata
+        run: dotnet run --project src/Armor.Publisher -c Release -- --channel aptyum --output artifacts
+      - name: Publish repos to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: artifacts/repo
+          destination_dir: .
+          keep_files: true
+
+  # ---- Package managers: generate manifests, submit where tokens exist -----------------------
+
+  managers:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "${{ env.DOTNET_VERSIONS }}" }
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Stage installer assets
+        run: mkdir -p artifacts && find dl -type f -exec cp {} artifacts/ \;
+      - name: Generate scoop / winget / brew cask manifests
+        run: |
+          dotnet run --project src/Armor.Publisher -c Release -- --channel scoop --output artifacts
+          dotnet run --project src/Armor.Publisher -c Release -- --channel winget --output artifacts
+          dotnet run --project src/Armor.Publisher -c Release -- --channel brewcask --output artifacts
+      - name: Pack + push dotnet global tool
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet run --project src/Armor.Publisher -c Release -- --channel dotnettool --output artifacts
+          if [ -n "$NUGET_API_KEY" ]; then
+            dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          else
+            echo "::warning::NUGET_API_KEY not set — .nupkg generated but not pushed (pending)."
+          fi
+      - name: Upload generated manifests
+        uses: actions/upload-artifact@v4
+        with: { name: package-manager-manifests, path: artifacts/manifests/** }
+      # The tap/bucket pushes and the winget/choco/snap/flatpak submissions run here once their
+      # tokens exist. They end at external review gates (winget PR, Chocolatey moderation, Flathub/
+      # Snap review); the pipeline should submit and then report the pending state honestly.
+      - name: Report pending submissions
+        run: |
+          echo "::notice::Manifests generated. Submission to winget/choco/snap/flatpak and pushes to"
+          echo "::notice::the Homebrew tap / Scoop bucket require their tokens; wire them here to finish."
+
+  # ---- Windows-only package build (Chocolatey) ----------------------------------------------
+
+  choco:
+    needs: [release]
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "${{ env.DOTNET_VERSIONS }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: installers-windows, path: artifacts }
+      - name: Generate Chocolatey package
+        run: dotnet run --project src/Armor.Publisher -c Release -- --channel choco --output artifacts
+      - name: Pack + push (if token)
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          $nuspec = Get-ChildItem artifacts/manifests/choco -Filter *.nuspec | Select-Object -First 1
+          choco pack $nuspec.FullName --outputdirectory artifacts
+          if ($env:CHOCO_API_KEY) {
+            choco push (Get-ChildItem artifacts -Filter *.nupkg | Select-Object -First 1).FullName --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+          } else {
+            Write-Host "::warning::CHOCO_API_KEY not set — .nupkg packed but not pushed (pending)."
+          }
+      - uses: actions/upload-artifact@v4
+        with: { name: chocolatey-package, path: "artifacts/*.nupkg" }

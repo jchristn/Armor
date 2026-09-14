@@ -10,6 +10,7 @@ x86/
 build/
 bld/
 dist/
+installers/
 [Ll]og/
 [Ll]ogs/
 

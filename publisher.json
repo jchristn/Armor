@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 2,
+  "project": {
+    "name": "Armor",
+    "displayName": "Armor",
+    "packageId": "JoelChristner.Armor",
+    "repo": "https://github.com/jchristn/armor",
+    "homepage": "https://github.com/jchristn/armor",
+    "description": "Armor: cross-platform backup agent with a terminal console for policies, schedules, storage targets, encryption, and restores.",
+    "license": "MIT",
+    "maintainer": "Joel Christner <joel.christner@gmail.com>"
+  },
+  "build": {
+    "artifacts": [
+      {
+        "id": "agent",
+        "csproj": "src/Armor.Agent/Armor.Agent.csproj",
+        "exeName": "Armor.Agent",
+        "kind": "Daemon"
+      },
+      {
+        "id": "tui",
+        "csproj": "src/Armor.Tui/Armor.Tui.csproj",
+        "exeName": "Armor.Tui",
+        "kind": "Server"
+      }
+    ],
+    "frameworks": [
+      "net10.0"
+    ],
+    "runtimes": [
+      "win-x64",
+      "win-arm64",
+      "osx-x64",
+      "osx-arm64",
+      "linux-x64",
+      "linux-arm64"
+    ]
+  },
+  "destinations": {
+    "githubRepo": "jchristn/armor",
+    "githubPagesUrl": "https://jchristn.github.io/armor",
+    "homebrewTapRepo": "jchristn/homebrew-armor",
+    "scoopBucketRepo": "jchristn/armor",
+    "wingetPkgsRepo": "microsoft/winget-pkgs",
+    "nugetSource": "https://api.nuget.org/v3/index.json"
+  },
+  "channels": {
+    "inno": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["win-x64", "win-arm64"],
+      "options": {}
+    },
+    "winget": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": [],
+      "options": { "identifier": "JoelChristner.Armor" }
+    },
+    "choco": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": [],
+      "options": { "packageName": "armor" }
+    },
+    "scoop": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["win-x64", "win-arm64"],
+      "options": { "manifestName": "armor" }
+    },
+    "dmg": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["osx-x64", "osx-arm64"],
+      "options": {}
+    },
+    "brewcask": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": [],
+      "options": { "caskName": "armor" }
+    },
+    "debrpm": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["linux-x64", "linux-arm64"],
+      "options": {}
+    },
+    "appimage": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["linux-x64", "linux-arm64"],
+      "options": {}
+    },
+    "aptyum": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": [],
+      "options": { "publishTo": "gh-pages" }
+    },
+    "snap": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["linux-x64", "linux-arm64"],
+      "options": { "snapName": "armor", "grade": "stable", "confinement": "classic" }
+    },
+    "flatpak": {
+      "enabled": true,
+      "artifact": "agent",
+      "runtimes": ["linux-x64", "linux-arm64"],
+      "options": { "appId": "com.joelchristner.Armor" }
+    },
+    "dotnettool": {
+      "enabled": true,
+      "artifact": "tui",
+      "runtimes": [],
+      "options": { "toolCommandName": "armor", "packageId": "JoelChristner.Armor.Tui" }
+    },
+    "docker": {
+      "enabled": false,
+      "artifact": "tui",
+      "runtimes": [],
+      "options": {}
+    },
+    "helm": {
+      "enabled": false,
+      "artifact": "tui",
+      "runtimes": [],
+      "options": {}
+    }
+  },
+  "signing": {
+    "macOs": {
+      "vaultRef": "APPLE_DEVELOPER_ID",
+      "notarizeProfileRef": "APPLE_NOTARY_PROFILE",
+      "notarize": true,
+      "isConfigured": false
+    },
+    "windows": {
+      "vaultRef": "WINDOWS_CERT_PFX",
+      "passwordRef": "WINDOWS_CERT_PASSWORD",
+      "notarize": false,
+      "isConfigured": false
+    },
+    "linux": {
+      "vaultRef": "GPG_PRIVATE_KEY",
+      "passwordRef": "GPG_PASSPHRASE",
+      "notarize": false,
+      "isConfigured": false
+    }
+  },
+  "releaseNotes": {
+    "source": "CHANGELOG.md",
+    "section": "## {version}"
+  }
+}

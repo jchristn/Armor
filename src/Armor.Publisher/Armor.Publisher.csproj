@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!--
+      The other projects multi-target net8.0;net10.0 via Directory.Build.props. The
+      publisher is a build-time tool only, so it single-targets the current SDK. Setting
+      TargetFramework (singular) overrides the inherited TargetFrameworks.
+    -->
+    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks />
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Build tool, not a library: no XML doc file (avoids CS1591 on the config DTOs). -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>armor-publish</AssemblyName>
+    <RootNamespace>Armor.Publisher</RootNamespace>
+    <Description>Armor publisher: reads publisher.json and produces installer packages (Windows/macOS/Linux) and container/tap artifacts.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Templates are copied next to the tool so channels can read them at runtime. -->
+    <None Include="Templates\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
