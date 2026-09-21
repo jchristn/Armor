@@ -49,6 +49,7 @@
     "inno": {
       "enabled": true,
       "artifact": "agent",
+      "include": ["tui"],
       "runtimes": ["win-x64", "win-arm64"],
       "options": {}
     },
@@ -73,6 +74,7 @@
     "dmg": {
       "enabled": true,
       "artifact": "agent",
+      "include": ["tui"],
       "runtimes": ["osx-x64", "osx-arm64"],
       "options": {}
     },
@@ -85,12 +87,14 @@
     "debrpm": {
       "enabled": true,
       "artifact": "agent",
+      "include": ["tui"],
       "runtimes": ["linux-x64", "linux-arm64"],
       "options": {}
     },
     "appimage": {
       "enabled": true,
       "artifact": "agent",
+      "include": ["tui"],
       "runtimes": ["linux-x64", "linux-arm64"],
       "options": {}
     },

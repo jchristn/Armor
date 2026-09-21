@@ -29,7 +29,7 @@ namespace Armor.Publisher.Channels
             foreach (string rid in context.Runtimes)
             {
                 Console.WriteLine($"[debrpm] publishing {context.Artifact.Id} for {rid}");
-                string payloadDir = context.PublishPayload(rid);
+                string payloadDir = context.PublishCombinedPayload(rid);
 
                 string root = Path.Combine(context.StagingDir, $"pkgroot-{rid}");
                 if (Directory.Exists(root)) Directory.Delete(root, true);
@@ -38,9 +38,20 @@ namespace Armor.Publisher.Channels
                 Directory.CreateDirectory(Path.Combine(root, "usr", "lib", "systemd", "system"));
 
                 FileSystemUtil.CopyTree(payloadDir, Path.Combine(root, "opt", "armor"));
+                BundleLicense(context, root, pkg);
                 File.WriteAllText(Path.Combine(root, "usr", "lib", "systemd", "system", "armor-agent.service"), SystemdUnit(context));
                 // Relative symlink so it resolves against the package's install root.
                 ProcessRunner.Run("ln", new[] { "-sf", $"/opt/armor/{context.ExeName}", Path.Combine(root, "usr", "bin", "armor-agent") });
+
+                // Expose each bundled CLI on PATH. The first include takes the project name as its
+                // command (matching the dotnet-tool command); any others use their executable name.
+                IReadOnlyList<string> includes = context.IncludedArtifacts;
+                for (int i = 0; i < includes.Count; i++)
+                {
+                    string exe = context.ExeNameOf(includes[i]);
+                    string cmd = i == 0 ? pkg : exe.ToLowerInvariant();
+                    ProcessRunner.Run("ln", new[] { "-sf", $"/opt/armor/{exe}", Path.Combine(root, "usr", "bin", cmd) });
+                }
 
                 string scripts = Path.Combine(context.StagingDir, $"scripts-{rid}");
                 Directory.CreateDirectory(scripts);
@@ -87,6 +98,27 @@ namespace Armor.Publisher.Channels
 
             context.EmitChecksum(outPath);
             return outPath;
+        }
+
+        /// <summary>
+        /// Copies the license into the install tree next to the payload (/opt/armor) and at the
+        /// Debian doc convention (/usr/share/doc/&lt;pkg&gt;/copyright). .deb/.rpm installs are
+        /// non-interactive, so the license ships on disk rather than as a click-through prompt.
+        /// </summary>
+        private static void BundleLicense(ChannelContext context, string root, string pkg)
+        {
+            string? src = context.LicenseFile();
+            if (src == null)
+            {
+                Console.WriteLine("[debrpm] WARNING: no license file found at repo root; packages will carry license metadata only.");
+                return;
+            }
+
+            File.Copy(src, Path.Combine(root, "opt", "armor", Path.GetFileName(src)), overwrite: true);
+
+            string docDir = Path.Combine(root, "usr", "share", "doc", pkg);
+            Directory.CreateDirectory(docDir);
+            File.Copy(src, Path.Combine(docDir, "copyright"), overwrite: true);
         }
 
         private static string MaintainerOrDefault(ChannelContext c) =>

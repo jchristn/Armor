@@ -128,5 +128,66 @@ namespace Test.Publisher
         {
             Assert.Null(ChannelRegistry.Resolve("does-not-exist"));
         }
+
+        [Fact]
+        public void LicenseFile_finds_license_at_repo_root()
+        {
+            string repo = Directory.CreateTempSubdirectory("armor-lic").FullName;
+            try
+            {
+                string license = Path.Combine(repo, "LICENSE.md");
+                File.WriteAllText(license, "MIT License ...");
+                ChannelContext ctx = new ChannelContext { RepoRoot = repo };
+                Assert.Equal(license, ctx.LicenseFile());
+            }
+            finally { Directory.Delete(repo, true); }
+        }
+
+        [Fact]
+        public void Channel_include_parses_and_defaults_empty()
+        {
+            string json = @"{
+              ""schemaVersion"": 2,
+              ""project"": { ""name"": ""Armor"" },
+              ""build"": { ""artifacts"": [ { ""id"": ""agent"" }, { ""id"": ""tui"" } ] },
+              ""channels"": {
+                ""inno"": { ""enabled"": true, ""artifact"": ""agent"", ""include"": [ ""tui"" ] },
+                ""winget"": { ""enabled"": true, ""artifact"": ""agent"" }
+              }
+            }";
+            string tmp = Path.GetTempFileName();
+            try
+            {
+                File.WriteAllText(tmp, json);
+                PublisherConfig cfg = PublisherConfig.Load(tmp);
+                Assert.Equal(new[] { "tui" }, cfg.Channels["inno"].Include);
+                Assert.Empty(cfg.Channels["winget"].Include);
+            }
+            finally { File.Delete(tmp); }
+        }
+
+        [Fact]
+        public void ExeNameOf_resolves_included_artifact_exe()
+        {
+            PublisherConfig cfg = new PublisherConfig();
+            cfg.Build.Artifacts.Add(new ArtifactInfo { Id = "tui", ExeName = "Armor.Tui" });
+            cfg.Build.Artifacts.Add(new ArtifactInfo { Id = "cli" });
+            ChannelContext ctx = new ChannelContext { Config = cfg };
+            Assert.Equal("Armor.Tui", ctx.ExeNameOf("tui"));
+            Assert.Equal("cli", ctx.ExeNameOf("cli"));       // falls back to id when exeName unset
+            Assert.Equal("nope", ctx.ExeNameOf("nope"));     // unknown id echoes back
+        }
+
+        [Fact]
+        public void LicenseFile_returns_null_when_absent()
+        {
+            string repo = Directory.CreateTempSubdirectory("armor-nolic").FullName;
+            try
+            {
+                ChannelContext ctx = new ChannelContext { RepoRoot = repo };
+                Assert.Null(ctx.LicenseFile());
+            }
+            finally { Directory.Delete(repo, true); }
+        }
     }
 }

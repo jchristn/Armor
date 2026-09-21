@@ -19,6 +19,9 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+; License agreement page. When {{LicenseFile}} is non-empty, Inno shows a mandatory
+; "I accept the agreement" page and disables Next until the user accepts.
+LicenseFile={{LicenseFile}}
 OutputDir={{OutputDir}}
 OutputBaseFilename={{OutputBaseName}}
 Compression=lzma2
@@ -40,6 +43,8 @@ Source: "{{PayloadDir}}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsub
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+; Extra shortcuts for bundled tools (e.g. the CLI), injected by InnoChannel.
+{{ExtraIcons}}
 
 [Run]
 ; Register a Scheduled Task that launches the agent at logon with highest privileges. This is the

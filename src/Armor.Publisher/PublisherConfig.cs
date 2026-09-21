@@ -120,6 +120,12 @@ namespace Armor.Publisher
         public string Artifact { get; set; } = "";
 
         /// <summary>
+        /// Additional artifact ids to bundle alongside <see cref="Artifact"/> in the same package
+        /// (e.g. the CLI shipped next to the tray agent). Empty for single-artifact channels.
+        /// </summary>
+        public List<string> Include { get; set; } = new List<string>();
+
+        /// <summary>
         /// Runtimes to build for this channel. When empty, the driver derives them from
         /// <see cref="BuildInfo.Runtimes"/> filtered to the channel's OS family.
         /// </summary>

@@ -25,12 +25,14 @@ namespace Armor.Publisher.Channels
         {
             string iscc = ResolveIscc();
             string template = ReadTemplate();
+            // Stage the license once; iscc reads LicenseFile relative to the .iss location (StagingDir).
+            string licenseRel = StageLicense(context);
             List<string> outputs = new List<string>();
 
             foreach (string rid in context.Runtimes)
             {
                 Console.WriteLine($"[inno] publishing {context.Artifact.Id} for {rid}");
-                string payloadDir = context.PublishPayload(rid);
+                string payloadDir = context.PublishCombinedPayload(rid);
 
                 // Inno Setup 6.3+ architecture identifiers: "arm64" and "x64compatible"
                 // (the older bare "x64" is rejected by current compilers).
@@ -48,6 +50,8 @@ namespace Armor.Publisher.Channels
                     .Replace("{{ArchitecturesAllowed}}", arch)
                     .Replace("{{ArchitecturesInstallIn64BitMode}}", arch)
                     .Replace("{{PayloadDir}}", payloadDir)
+                    .Replace("{{LicenseFile}}", licenseRel)
+                    .Replace("{{ExtraIcons}}", BuildExtraIcons(context))
                     .Replace("{{ExeName}}", context.ExeName + ".exe")
                     .Replace("{{OutputDir}}", context.OutputDir)
                     .Replace("{{OutputBaseName}}", setupBaseName);
@@ -63,6 +67,42 @@ namespace Armor.Publisher.Channels
             }
 
             return outputs;
+        }
+
+        /// <summary>
+        /// Builds one [Icons] line per bundled CLI so the extra executables (installed into {app}
+        /// by the combined payload) get their own Start-menu shortcuts. Empty when nothing extra
+        /// is bundled.
+        /// </summary>
+        private static string BuildExtraIcons(ChannelContext context)
+        {
+            string icons = "";
+            foreach (string id in context.IncludedArtifacts)
+            {
+                string exe = context.ExeNameOf(id) + ".exe";
+                string label = context.Config.Project.DisplayName + " " + id.ToUpperInvariant();
+                icons += $"Name: \"{{group}}\\{label}\"; Filename: \"{{app}}\\{exe}\"\n";
+            }
+            return icons;
+        }
+
+        /// <summary>
+        /// Copies the project's license into the staging dir as LICENSE.txt and returns the file
+        /// name to reference from the .iss (relative to the script's own location). Returns an empty
+        /// string when no license file exists, which leaves the Inno license page disabled.
+        /// </summary>
+        private static string StageLicense(ChannelContext context)
+        {
+            string? src = context.LicenseFile();
+            if (src == null)
+            {
+                Console.WriteLine("[inno] WARNING: no license file found at repo root; the installer will not show a license page.");
+                return "";
+            }
+
+            string dst = Path.Combine(context.StagingDir, "LICENSE.txt");
+            File.Copy(src, dst, overwrite: true);
+            return "LICENSE.txt";
         }
 
         /// <summary>Finds iscc.exe on PATH or at the standard Inno Setup 6 install locations.</summary>

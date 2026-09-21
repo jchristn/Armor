@@ -46,6 +46,43 @@ namespace Armor.Publisher.Channels
             return Payload.Publish(RepoRoot, Artifact, rid, Framework, StagingDir);
         }
 
+        /// <summary>
+        /// Publishes the channel's primary artifact plus any artifacts named in the channel's
+        /// "include" list, merged into a single payload directory that is returned. Installer
+        /// channels use this so one package installs the tray agent and the CLI together. When the
+        /// channel includes nothing extra, this is equivalent to <see cref="PublishPayload"/>.
+        /// </summary>
+        public string PublishCombinedPayload(string rid)
+        {
+            string primary = PublishPayload(rid);
+            if (Channel.Include.Count == 0) return primary;
+
+            string merged = Path.Combine(StagingDir, $"combined-{Artifact.Id}-{rid}");
+            if (Directory.Exists(merged)) Directory.Delete(merged, true);
+            FileSystemUtil.CopyTree(primary, merged);
+
+            foreach (string id in Channel.Include)
+            {
+                ArtifactInfo? extra = Config.FindArtifact(id);
+                if (extra == null)
+                    throw new InvalidDataException($"Channel '{Artifact.Id}' includes unknown artifact id '{id}'.");
+                // Distinct exe names coexist; any shared self-contained runtime files are identical.
+                FileSystemUtil.CopyTree(Payload.Publish(RepoRoot, extra, rid, Framework, StagingDir), merged);
+            }
+            return merged;
+        }
+
+        /// <summary>Extra artifact ids this channel bundles alongside its primary artifact.</summary>
+        public IReadOnlyList<string> IncludedArtifacts => Channel.Include;
+
+        /// <summary>Base executable name (no extension) of an included/other artifact by id.</summary>
+        public string ExeNameOf(string artifactId)
+        {
+            ArtifactInfo? a = Config.FindArtifact(artifactId);
+            if (a == null) return artifactId;
+            return string.IsNullOrEmpty(a.ExeName) ? a.Id : a.ExeName;
+        }
+
         /// <summary>Reads a string option from the channel's options block, or a default.</summary>
         public string Option(string key, string fallback = "")
         {
@@ -58,6 +95,21 @@ namespace Armor.Publisher.Channels
         public string EmitChecksum(string file)
         {
             return Checksums.WriteSidecar(file);
+        }
+
+        /// <summary>
+        /// Resolves the project's license text file at the repo root (LICENSE.md, LICENSE, ...),
+        /// or null if none is present. Installer channels show this as a mandatory acceptance page;
+        /// package channels bundle it alongside the payload.
+        /// </summary>
+        public string? LicenseFile()
+        {
+            foreach (string name in new[] { "LICENSE.md", "LICENSE", "LICENSE.txt", "COPYING", "COPYING.md" })
+            {
+                string p = Path.Combine(RepoRoot, name);
+                if (File.Exists(p)) return p;
+            }
+            return null;
         }
 
         /// <summary>
