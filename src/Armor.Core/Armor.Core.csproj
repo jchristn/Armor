@@ -7,19 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Blobject.Core" Version="5.0.20" />
-    <PackageReference Include="Blobject.Disk" Version="5.0.19" />
-    <PackageReference Include="Blobject.AmazonS3" Version="5.0.21" />
-    <PackageReference Include="Blobject.AzureBlob" Version="5.0.19" />
-    <PackageReference Include="Blobject.CIFS" Version="5.0.20" />
-    <PackageReference Include="Blobject.NFS" Version="5.0.20" />
-    <PackageReference Include="Blobject.GoogleCloud" Version="5.0.20" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.11" />
+    <PackageReference Include="Blobject.Core" Version="6.0.0" />
+    <PackageReference Include="Blobject.Disk" Version="6.0.0" />
+    <PackageReference Include="Blobject.AmazonS3" Version="6.0.0" />
+    <PackageReference Include="Blobject.AzureBlob" Version="6.0.0" />
+    <PackageReference Include="Blobject.CIFS" Version="6.0.0" />
+    <PackageReference Include="Blobject.NFS" Version="6.0.0" />
+    <PackageReference Include="Blobject.GoogleCloud" Version="6.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <!--
-      Pin the SQLitePCLRaw family to a patched build. Microsoft.Data.Sqlite 9.0.11 pulls
-      SQLitePCLRaw 2.1.10, whose bundled SQLite native library is flagged by NuGet audit
-      (NU1903 / GHSA-2m69-gcr7-jv3q). This direct reference overrides the transitive
-      version across the dependency graph with a fixed release.
+      Pin the SQLitePCLRaw family to a patched build. Older SQLitePCLRaw 2.1.x releases bundle a
+      SQLite native library flagged by NuGet audit (NU1903 / GHSA-2m69-gcr7-jv3q), so this direct
+      reference keeps the whole dependency graph on a fixed release. Stay on the 2.1.x line:
+      Microsoft.Data.Sqlite 10 is built against SQLitePCLRaw 2.1, and 3.x is a breaking major.
     -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <PackageReference Include="PrettyId" Version="2.0.1" />
