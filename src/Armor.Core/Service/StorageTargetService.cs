@@ -199,7 +199,9 @@ namespace Armor.Core.Service
         /// </summary>
         /// <param name="id">Target identifier. Cannot be null or whitespace.</param>
         /// <param name="token">Cancellation token.</param>
-        /// <returns>True if the connection round-trips; otherwise false.</returns>
+        /// <returns>True if the connection round-trips; false if the probe read back different bytes.</returns>
+        /// <exception cref="ArmorStorageException">Thrown when the probe cannot be written, read back, or
+        /// deleted; the message names the failed step and the underlying error.</exception>
         public async Task<bool> ValidateAsync(string id, CancellationToken token = default)
         {
             IStorageRepository repository = await BuildRepositoryAsync(id, token).ConfigureAwait(false);

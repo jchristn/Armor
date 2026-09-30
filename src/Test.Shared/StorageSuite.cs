@@ -40,6 +40,36 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("ValidateConnectionReason", "Failed connection validation reports the step and cause", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        {
+                            // A file where the probe directory belongs makes the probe write fail on any OS.
+                            string root = ws.Combine("disk");
+                            System.IO.Directory.CreateDirectory(root);
+                            System.IO.File.WriteAllText(System.IO.Path.Combine(root, "armor.probe"), "blocker");
+
+                            StorageTarget target = new StorageTarget();
+                            target.Name = "blocked";
+                            target.Type = StorageTargetTypeEnum.Disk;
+                            target.DiskPath = root;
+                            IStorageRepository repo = StorageRepositoryFactory.Create(target);
+
+                            string? message = null;
+                            try
+                            {
+                                await repo.ValidateConnectionAsync(ct).ConfigureAwait(false);
+                            }
+                            catch (ArmorStorageException ex)
+                            {
+                                message = ex.Message;
+                            }
+                            Check.NotNull(message, "validation throws ArmorStorageException");
+                            Check.True(message!.StartsWith("Could not write a test object: ", StringComparison.Ordinal), "message names the failed step");
+                            Check.True(message.Length > "Could not write a test object: ".Length, "message carries the underlying cause");
+                        }
+                    }),
+
                     Case("ObjectRoundTrip", "Object write/read/exists/delete", async ct =>
                     {
                         using (TempWorkspace ws = new TempWorkspace())

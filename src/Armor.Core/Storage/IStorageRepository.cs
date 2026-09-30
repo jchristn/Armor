@@ -15,7 +15,9 @@ namespace Armor.Core.Storage
         /// Validate connectivity by writing, reading back, and deleting a small probe object.
         /// </summary>
         /// <param name="token">Cancellation token.</param>
-        /// <returns>True if the round-trip succeeds; otherwise false.</returns>
+        /// <returns>True if the round-trip succeeds; false if the probe read back different bytes.</returns>
+        /// <exception cref="Armor.Core.Exceptions.ArmorStorageException">Thrown when the probe cannot be
+        /// written, read back, or deleted; the message names the failed step and the underlying error.</exception>
         Task<bool> ValidateConnectionAsync(CancellationToken token = default);
 
         /// <summary>

@@ -47,9 +47,13 @@ namespace Armor.Core.Storage
             string probeKey = "armor.probe/" + Guid.NewGuid().ToString("N");
             byte[] payload = RandomNumberGenerator.GetBytes(32);
 
+            // Track the step in progress so a failure says what went wrong (write, read back, or delete)
+            // and why, instead of collapsing every error into a bare "false".
+            string step = "write";
             try
             {
                 await WriteObjectAsync(probeKey, payload, token).ConfigureAwait(false);
+                step = "read back";
                 byte[] readBack = await ReadObjectAsync(probeKey, token).ConfigureAwait(false);
                 bool match = readBack.Length == payload.Length;
                 if (match)
@@ -64,10 +68,11 @@ namespace Armor.Core.Storage
                     }
                 }
 
+                step = "delete";
                 await DeleteObjectAsync(probeKey, token).ConfigureAwait(false);
                 return match;
             }
-            catch (Exception) when (!(token.IsCancellationRequested))
+            catch (Exception ex) when (!(token.IsCancellationRequested))
             {
                 try
                 {
@@ -76,8 +81,23 @@ namespace Armor.Core.Storage
                 catch (Exception)
                 {
                 }
-                return false;
+                throw new ArmorStorageException("Could not " + step + " a test object: " + DescribeFailure(ex), ex);
             }
+        }
+
+        /// <summary>
+        /// Build a readable reason from an exception chain: the innermost non-empty message (the actual
+        /// OS or provider error), falling back to the exception type name when no message is present.
+        /// </summary>
+        private static string DescribeFailure(Exception ex)
+        {
+            string? reason = null;
+            for (Exception? current = ex; current != null; current = current.InnerException)
+            {
+                if (!String.IsNullOrWhiteSpace(current.Message))
+                    reason = current.Message.Trim();
+            }
+            return reason ?? ex.GetType().Name;
         }
 
         /// <inheritdoc/>

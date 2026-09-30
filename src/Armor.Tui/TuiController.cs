@@ -1515,7 +1515,7 @@ namespace Armor.Tui
                 SetStatus("Test of '" + target.Name + "': " + (ok ? "succeeded" : "failed") + ".");
                 await NotifyAsync(
                     ok ? "Backup target ready" : "Connection test failed",
-                    ok ? "'" + target.Name + "' is reachable and writable." : "Could not write a test object to '" + target.Name + "'.",
+                    ok ? "'" + target.Name + "' is reachable and writable." : "A test object written to '" + target.Name + "' read back different data.",
                     ok ? "Backups can be stored here." : "Check the connection details, then test again with Enter.").ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -2653,7 +2653,7 @@ namespace Armor.Tui
                     {
                         _Busy = false;
                         _ActivityText = null;
-                        SetStatus("Validation of '" + targetName + "': " + (ok ? "succeeded" : "failed") + ".");
+                        SetStatus("Validation of '" + targetName + "' " + (ok ? "succeeded." : "failed: the test object read back different data."));
                     });
                 }
                 catch (Exception ex)
