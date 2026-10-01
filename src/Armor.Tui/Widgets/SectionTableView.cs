@@ -138,7 +138,9 @@ namespace Armor.Tui.Widgets
         /// <see cref="SetRows"/>.
         /// </summary>
         /// <param name="headers">Column headers. Cannot be null.</param>
-        /// <param name="weights">Relative column widths. Cannot be null.</param>
+        /// <param name="weights">Relative column widths. A negative value is a fixed width of that many
+        /// characters (for example -16 for a <c>yyyy-MM-dd HH:mm</c> timestamp); the positive weights share
+        /// what remains. Cannot be null.</param>
         /// <param name="showHeader">Whether to draw the header row.</param>
         /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
         public void SetColumns(string[] headers, int[] weights, bool showHeader = true)
@@ -179,8 +181,10 @@ namespace Armor.Tui.Widgets
         /// </summary>
         /// <param name="rows">The rows. Cannot be null.</param>
         /// <param name="emptyMessage">The message shown when there are no rows. Cannot be null.</param>
+        /// <param name="keepPosition">When true, keep the current scroll offset instead of returning to the
+        /// top — for a background refresh of the same list, so the view does not jump under the user.</param>
         /// <exception cref="ArgumentNullException">Thrown when an argument is null.</exception>
-        public void SetRows(IEnumerable<TableRow> rows, string emptyMessage)
+        public void SetRows(IEnumerable<TableRow> rows, string emptyMessage, bool keepPosition = false)
         {
             if (rows == null)
                 throw new ArgumentNullException(nameof(rows));
@@ -190,7 +194,8 @@ namespace Armor.Tui.Widgets
             _Rows.AddRange(rows);
             if (_Selected >= _Rows.Count)
                 _Selected = Math.Max(0, _Rows.Count - 1);
-            _ScrollTop = 0;
+            if (!keepPosition)
+                _ScrollTop = 0;
             SelectionChanged?.Invoke();
         }
 
@@ -427,23 +432,43 @@ namespace Armor.Tui.Widgets
             int gaps = columns - 1;
             int available = Math.Max(columns, totalWidth - gaps);
 
-            int weightSum = 0;
-            for (int i = 0; i < columns; i++)
-                weightSum += i < _Weights.Length ? Math.Max(1, _Weights[i]) : 1;
-
+            // Negative weights are fixed widths, taken first; positive weights share the rest.
             int[] widths = new int[columns];
-            int used = 0;
+            int fixedTotal = 0;
+            int weightSum = 0;
+            int lastProportional = -1;
             for (int i = 0; i < columns; i++)
             {
-                int weight = i < _Weights.Length ? Math.Max(1, _Weights[i]) : 1;
-                widths[i] = Math.Max(3, available * weight / weightSum);
+                int weight = i < _Weights.Length ? _Weights[i] : 1;
+                if (weight < 0)
+                {
+                    widths[i] = -weight;
+                    fixedTotal += widths[i];
+                }
+                else
+                {
+                    weightSum += Math.Max(1, weight);
+                    lastProportional = i;
+                }
+            }
+
+            int flexible = Math.Max(0, available - fixedTotal);
+            int used = fixedTotal;
+            for (int i = 0; i < columns; i++)
+            {
+                int weight = i < _Weights.Length ? _Weights[i] : 1;
+                if (weight < 0)
+                    continue;
+                widths[i] = Math.Max(3, flexible * Math.Max(1, weight) / weightSum);
                 used += widths[i];
             }
 
-            // Hand any rounding remainder (or overflow) to the last column so the row fills the width.
-            widths[columns - 1] += available - used;
-            if (widths[columns - 1] < 1)
-                widths[columns - 1] = 1;
+            // Hand any rounding remainder (or overflow) to the last proportional column — or the last column
+            // when every column is fixed — so the row fills the width.
+            int absorb = lastProportional >= 0 ? lastProportional : columns - 1;
+            widths[absorb] += available - used;
+            if (widths[absorb] < 1)
+                widths[absorb] = 1;
             return widths;
         }
 

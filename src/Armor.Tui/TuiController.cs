@@ -147,7 +147,11 @@ namespace Armor.Tui
                 // A restore knows its totals up front (from the backup record), so it never shows the
                 // backup's "scanning" pre-phase.
                 Scanning = kind == JobKind.Backup;
+                StartedUtc = DateTime.UtcNow;
             }
+
+            // When this process started the run; drives the live "Runtime" column in the Backup jobs view.
+            public DateTime StartedUtc { get; }
 
             public JobKind Kind { get; }
 
@@ -506,10 +510,19 @@ namespace Armor.Tui
                                 LogExternalCompletion(finished, policyName);
                             }
                         }
+                        bool externalChanged = !nowRunning.SetEquals(_ExternalRunningIds);
                         _ExternalRunningIds = nowRunning;
 
                         _ExternalJobs = external;
                         RefreshJobView();
+
+                        // An agent run starting or finishing changes Last Success, the schedule's Last/Next run,
+                        // and the Backup jobs list; while anything runs, Backup jobs also reloads each tick so
+                        // its Runtime column counts up.
+                        if (externalChanged)
+                            RefreshJobDrivenSection();
+                        else if (_Current == Section.Runs && (_Jobs.Count > 0 || running.Count > 0))
+                            Launch(() => LoadRunsAsync(true));
                     });
                 }
                 catch (ObjectDisposedException)
@@ -540,7 +553,22 @@ namespace Armor.Tui
             }
         }
 
-        private async Task LoadPoliciesAsync()
+        /// <summary>
+        /// Reload the current section in place when it shows data that a backup starting or finishing
+        /// changes: the Policies "Last Success" column, the Schedules "Last run"/"Next run" columns, or the
+        /// Backup jobs list. Other sections are left alone. Must be called on the UI thread.
+        /// </summary>
+        private void RefreshJobDrivenSection()
+        {
+            switch (_Current)
+            {
+                case Section.Policies: Launch(() => LoadPoliciesAsync(true)); break;
+                case Section.Schedules: Launch(() => LoadSchedulesAsync(true)); break;
+                case Section.Runs: Launch(() => LoadRunsAsync(true)); break;
+            }
+        }
+
+        private async Task LoadPoliciesAsync(bool keepPosition = false)
         {
             List<Policy> policies = await _Context.Database.Policies.ReadAllAsync().ConfigureAwait(false);
             Dictionary<string, DateTime> lastSuccess = await BuildLastSuccessMapAsync().ConfigureAwait(false);
@@ -562,7 +590,7 @@ namespace Armor.Tui
             }
 
             Content().SetHeadings("Policies (" + policies.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Back up now"), Hint("r", "Restore"), Hint("c", "Create"), Hint("e", "Edit"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
-            Content().SetRows(rows, "No policies yet. Press 'c' to create one.");
+            Content().SetRows(rows, "No policies yet. Press 'c' to create one.", keepPosition);
         }
 
         private async Task LoadTargetsAsync()
@@ -620,11 +648,13 @@ namespace Armor.Tui
             Content().SetRows(rows, "No encryption passwords yet. Press 'c' to create one.");
         }
 
-        private async Task LoadSchedulesAsync()
+        private async Task LoadSchedulesAsync(bool keepPosition = false)
         {
             List<Schedule> schedules = await _Context.Database.Schedules.ReadAllAsync().ConfigureAwait(false);
             Dictionary<string, string> policyNames = await BuildPolicyNameMapAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "Policy", "Schedule", "State", "Last run", "Next run" }, new int[] { 3, 4, 2, 9, 9 });
+            // Last/Next run use the compact local timestamp at a fixed width that exactly fits it; the full
+            // UTC + local form at a proportional width starved the Policy and Schedule columns into truncation.
+            Content().SetColumns(new[] { "Policy", "Schedule", "State", "Last run", "Next run" }, new int[] { 6, 4, -8, -16, -16 });
 
             List<TableRow> rows = new List<TableRow>();
             foreach (Schedule schedule in schedules)
@@ -635,13 +665,13 @@ namespace Armor.Tui
                     policyName,
                     DescribeCron(schedule.CronExpression),
                     schedule.Enabled ? "enabled" : "disabled",
-                    schedule.LastRunUtc.HasValue ? FormatTimestamp(schedule.LastRunUtc.Value) : "—",
-                    schedule.NextRunUtc.HasValue ? FormatTimestamp(schedule.NextRunUtc.Value) : "—",
+                    schedule.LastRunUtc.HasValue ? FormatLocalTimestamp(schedule.LastRunUtc.Value) : "—",
+                    schedule.NextRunUtc.HasValue ? FormatLocalTimestamp(schedule.NextRunUtc.Value) : "—",
                 }, schedule));
             }
 
             Content().SetHeadings("Schedules (" + schedules.Count + ")", new[] { Hint("↑↓", "Select"), Hint("↵", "Enable/disable"), Hint("c", "Create"), Hint("e", "Edit"), Hint("d", "Delete"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
-            Content().SetRows(rows, "No schedules yet. Press 'c' to create one.");
+            Content().SetRows(rows, "No schedules yet. Press 'c' to create one.", keepPosition);
         }
 
         private async Task<Dictionary<string, string>> BuildPolicyNameMapAsync()
@@ -671,20 +701,38 @@ namespace Armor.Tui
             return map;
         }
 
-        private async Task LoadRunsAsync()
+        private async Task LoadRunsAsync(bool keepPosition = false)
         {
             List<Schedule> schedules = await _Context.Database.Schedules.ReadAllAsync().ConfigureAwait(false);
             Dictionary<string, string> policyNames = await BuildPolicyNameMapAsync().ConfigureAwait(false);
-            Content().SetColumns(new[] { "When", "Policy", "What", "Status" }, new int[] { 9, 3, 4, 2 });
+            List<BackupJob> jobs = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
+            Content().SetColumns(new[] { "When", "Runtime", "Policy", "What", "Status" }, new int[] { -32, -11, 5, 3, -9 });
 
             List<TableRow> rows = new List<TableRow>();
+            DateTime now = DateTime.UtcNow;
 
             // Backups running right now (a live snapshot; the status workspace shows live progress). Each
             // carries its job handle so Enter here cancels it, the same as the status workspace does.
+            HashSet<string> ownedPolicies = new HashSet<string>(StringComparer.Ordinal);
             foreach (JobEntry active in _Jobs)
-                rows.Add(new TableRow(new[] { "now", active.PolicyName, active.Label, active.Cancelling ? "canceling" : "running" }, new RunningJobRow(active.Id)));
+            {
+                if (active.Kind == JobKind.Backup && !String.IsNullOrEmpty(active.PolicyId))
+                    ownedPolicies.Add(active.PolicyId);
+                rows.Add(new TableRow(new[] { "now", FormatDuration(now - active.StartedUtc), active.PolicyName, active.Label, active.Cancelling ? "canceling" : "running" }, new RunningJobRow(active.Id)));
+            }
+
+            // Backups the background agent is running. This process cannot cancel them, so Enter shows the
+            // job's details instead. A policy this process is itself backing up is already listed above.
+            foreach (BackupJob job in jobs)
+            {
+                if (job.Status != JobStatusEnum.Running || ownedPolicies.Contains(job.PolicyId))
+                    continue;
+                string runtime = job.StartedUtc.HasValue ? FormatDuration(now - job.StartedUtc.Value) : String.Empty;
+                rows.Add(new TableRow(new[] { "now", runtime, PolicyLabel(policyNames, job), job.BackupType.ToString(), "running" }, job));
+            }
+
             if (_Busy && !String.IsNullOrEmpty(_ActivityText))
-                rows.Add(new TableRow(new[] { "now", "—", _ActivityText!, "running" }, null));
+                rows.Add(new TableRow(new[] { "now", String.Empty, "—", _ActivityText!, "running" }, null));
 
             // Upcoming scheduled runs, soonest first.
             List<Schedule> ordered = new List<Schedule>(schedules);
@@ -702,6 +750,7 @@ namespace Armor.Tui
                 rows.Add(new TableRow(new[]
                 {
                     when,
+                    String.Empty,
                     policyName,
                     DescribeCron(schedule.CronExpression),
                     schedule.Enabled ? "scheduled" : "paused",
@@ -709,7 +758,6 @@ namespace Armor.Tui
             }
 
             // Past runs, newest first — the history you can scroll through. Press Enter on one for its details.
-            List<BackupJob> jobs = await _Context.Database.BackupJobs.ReadAllAsync().ConfigureAwait(false);
             int history = 0;
             for (int i = jobs.Count - 1; i >= 0; i--)
             {
@@ -719,9 +767,15 @@ namespace Armor.Tui
 
                 string policyName = policyNames.TryGetValue(job.PolicyId, out string? name) ? name : job.PolicyId;
                 DateTime? finished = job.CompletedUtc ?? job.StartedUtc;
+
+                // Runtime is shown only for a run that completed; a failed or canceled run is left blank.
+                string runtime = job.Status == JobStatusEnum.Completed && job.StartedUtc.HasValue && job.CompletedUtc.HasValue && job.CompletedUtc.Value >= job.StartedUtc.Value
+                    ? FormatDuration(job.CompletedUtc.Value - job.StartedUtc.Value)
+                    : String.Empty;
                 rows.Add(new TableRow(new[]
                 {
                     finished.HasValue ? FormatTimestamp(finished.Value) : "—",
+                    runtime,
                     policyName,
                     job.BackupType.ToString(),
                     job.Status.ToString().ToLowerInvariant(),
@@ -730,7 +784,7 @@ namespace Armor.Tui
             }
 
             Content().SetHeadings("Backup jobs — upcoming, in progress & past (" + history + ")", new[] { Hint("↑↓", "Scroll"), Hint("↵", "Details / cancel"), Hint("r", "Restore"), Hint("F5", "Refresh"), Hint("s", "Stats"), Hint("Esc", "Nav"), Hint("^Q", "Quit") });
-            Content().SetRows(rows, "Nothing running and nothing scheduled. Add a schedule under 'Schedules'.");
+            Content().SetRows(rows, "Nothing running and nothing scheduled. Add a schedule under 'Schedules'.", keepPosition);
         }
 
         private async Task RestoreFromSelectionAsync()
@@ -1105,6 +1159,15 @@ namespace Armor.Tui
         {
             DateTime asUtc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
             return asUtc.ToString("yyyy-MM-dd HH:mm") + "Z · " + asUtc.ToLocalTime().ToString("HH:mm zzz");
+        }
+
+        /// <summary>
+        /// Format a UTC timestamp compactly in local time (<c>yyyy-MM-dd HH:mm</c>), for narrow columns
+        /// where the full UTC + local form of <see cref="FormatTimestamp"/> would crowd out its neighbors.
+        /// </summary>
+        private static string FormatLocalTimestamp(DateTime utc)
+        {
+            return DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         }
 
         /// <summary>
@@ -2488,8 +2551,7 @@ namespace Armor.Tui
                         SetStatus(summary);
                         LogBackupStatistics(stats);
                         ShowBackupResultModal("Backup complete", policyName, summary, stats);
-                        if (_Current == Section.Runs)
-                            Launch(LoadCurrentSectionAsync);
+                        RefreshJobDrivenSection();
                     });
                 }
                 catch (OperationCanceledException)
@@ -2498,8 +2560,7 @@ namespace Armor.Tui
                     {
                         FinishJob(entry);
                         SetStatus("Backup of '" + policyName + "' canceled.");
-                        if (_Current == Section.Runs)
-                            Launch(LoadCurrentSectionAsync);
+                        RefreshJobDrivenSection();
                     });
                 }
                 catch (PolicyAlreadyRunningException)
@@ -2521,8 +2582,7 @@ namespace Armor.Tui
                         FinishJob(entry);
                         SetStatus("Backup of '" + policyName + "' failed: " + ex.Message);
                         ShowBackupResultModal("Backup failed", policyName, "The backup did not finish.", new List<string> { ex.Message });
-                        if (_Current == Section.Runs)
-                            Launch(LoadCurrentSectionAsync);
+                        RefreshJobDrivenSection();
                     });
                 }
             });
