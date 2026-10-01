@@ -58,6 +58,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   like a reachable backup was blocked.
 
 ### Fixed
+- **The tray icon is back.** Since the move to Avalonia 12 the agent's tray icon never appeared, because
+  Avalonia 12 only creates a tray icon that is registered with the application. On macOS the agent also
+  no longer shows a blank Dock tile — it lives only in the menu bar — and its menu-bar icon uses the
+  high-resolution logo so it stays sharp on Retina displays.
 - **Restoring a Windows backup on macOS or Linux recreates its folders.** Restoring into a folder on a
   Mac or Linux machine from a backup taken on Windows used to write every file straight into the
   destination with its whole Windows path as the filename (e.g. `Code\Armor\README.md`), because a

@@ -90,8 +90,11 @@ namespace Armor.Agent
         /// <returns>The configured application builder.</returns>
         public static AppBuilder BuildAvaloniaApp()
         {
+            // On macOS the agent lives only in the menu bar: without this, every GUI process gets a Dock tile,
+            // and an unbundled executable shows there as a generic blank icon. Ignored on other platforms.
             return AppBuilder.Configure<App>()
                 .UsePlatformDetect()
+                .With(new MacOSPlatformOptions { ShowInDock = false })
                 .LogToTrace();
         }
     }

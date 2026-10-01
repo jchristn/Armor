@@ -83,13 +83,20 @@ namespace Armor.Agent
             _Tray.Icon = LoadIcon();
             _Tray.Menu = menu;
             _Tray.IsVisible = true;
+
+            // Avalonia 12 only creates the native tray icon once it is attached to the application; a TrayIcon
+            // that is merely constructed stays invisible on every platform.
+            TrayIcon.SetIcons(this, new TrayIcons { _Tray });
         }
 
         private static WindowIcon? LoadIcon()
         {
             try
             {
-                Stream? stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Armor.Agent.logo.ico");
+                // The macOS menu bar scales the image to its own height on a Retina display, where the 32px ICO
+                // comes out blurry; the 512px PNG stays sharp. Windows and Linux trays use the ICO.
+                string resource = OperatingSystem.IsMacOS() ? "Armor.Agent.logo.png" : "Armor.Agent.logo.ico";
+                Stream? stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource);
                 if (stream == null)
                     return null;
                 using (stream)
@@ -156,8 +163,11 @@ namespace Armor.Agent
 
         private void OnAbout(object? sender, EventArgs e)
         {
+            // With no Dock tile on macOS the agent is never the active app, so a new window would open behind
+            // whatever is focused; activate it explicitly.
             AboutWindow window = new AboutWindow();
             window.Show();
+            window.Activate();
         }
 
         private void OnOpen(object? sender, EventArgs e)
