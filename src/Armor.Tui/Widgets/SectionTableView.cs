@@ -71,6 +71,7 @@ namespace Armor.Tui.Widgets
         private const byte SelectedBg = 6;       // cyan bar
         private const byte SelectedFg = 0;       // black text on the bar
         private const byte DimColor = 8;         // gray
+        private const int ColumnGap = 2;         // blank cells between adjacent columns
 
         /// <summary>
         /// An optional predicate the widget consults before acting on a mouse event; when it returns true
@@ -429,7 +430,7 @@ namespace Armor.Tui.Widgets
         private int[] ComputeWidths(int totalWidth)
         {
             int columns = Math.Max(1, _Weights.Length);
-            int gaps = columns - 1;
+            int gaps = (columns - 1) * ColumnGap;
             int available = Math.Max(columns, totalWidth - gaps);
 
             // Negative weights are fixed widths, taken first; positive weights share the rest.
@@ -510,7 +511,7 @@ namespace Armor.Tui.Widgets
             {
                 string value = i < cells.Length ? cells[i] : String.Empty;
                 surface.DrawText(x, y, Fit(value, widths[i]), style);
-                x += widths[i] + 1;
+                x += widths[i] + ColumnGap;
             }
         }
 
