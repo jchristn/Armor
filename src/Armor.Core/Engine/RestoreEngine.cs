@@ -9,6 +9,7 @@ namespace Armor.Core.Engine
     using Armor.Core.Database;
     using Armor.Core.Enums;
     using Armor.Core.Exceptions;
+    using Armor.Core.Helpers;
     using Armor.Core.Models;
     using Armor.Core.Storage;
 
@@ -88,7 +89,7 @@ namespace Armor.Core.Engine
                     token.ThrowIfCancellationRequested();
                     if (!MatchesScope(entry, restoreJob.Scope, normalizedSelector))
                         continue;
-                    string destination = MapDestination(entry.Path, restoreJob.DestinationRoot);
+                    string destination = RestorePathMapper.MapDestination(entry.Path, restoreJob.DestinationRoot);
                     await RestoreFileAsync(entry, destination, repository, dataKey, token).ConfigureAwait(false);
                     restoreJob.FilesRestored += 1;
                     restoreJob.BytesRestored += entry.SizeBytes;
@@ -210,19 +211,6 @@ namespace Armor.Core.Engine
                 {
                 }
             }
-        }
-
-        private static string MapDestination(string sourcePath, string? destinationRoot)
-        {
-            if (String.IsNullOrWhiteSpace(destinationRoot))
-                return sourcePath;
-
-            string root = Path.GetPathRoot(sourcePath) ?? String.Empty;
-            string relative = root.Length > 0 && sourcePath.StartsWith(root, StringComparison.Ordinal)
-                ? sourcePath.Substring(root.Length)
-                : sourcePath;
-            relative = relative.TrimStart('/', '\\');
-            return Path.Combine(destinationRoot, relative);
         }
 
         private static string Normalize(string path)

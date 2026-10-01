@@ -10,6 +10,7 @@ namespace Test.Shared
     using Armor.Core.Enums;
     using Armor.Core.Exceptions;
     using Armor.Core.Engine;
+    using Armor.Core.Helpers;
     using Armor.Core.Models;
     using Touchstone.Core;
 
@@ -175,6 +176,61 @@ namespace Test.Shared
                             AssertRestored(source, restore, new[] { "docs/one.txt", "docs/two.txt" });
                             Check.False(File.Exists(MappedPath(restore, Path.Combine(source, "top.txt"))), "top file not restored");
                         }
+                    }),
+
+                    Case("RestoreWindowsBackupIntoFolder", "A backup taken on Windows restores its folder tree into a folder on any OS", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            string source = Path.Combine(ws.RootDirectory, "source");
+                            WriteFile(source, "top.txt", Content(90, 3000));
+                            WriteFile(source, "docs/deep/note.txt", Content(91, 4000));
+
+                            Policy policy = NewPolicy(source);
+                            BackupEngine backup = new BackupEngine(fx.Database);
+                            BackupJob job = await backup.RunAsync(policy, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
+
+                            // Re-home the captured entries under Windows paths, exactly as a Windows machine
+                            // would have recorded them, and point the job at the rewritten manifest.
+                            Manifest windows = new Manifest { JobId = job.Id, PolicyId = "pol_test", BackupType = BackupTypeEnum.Full, PointInTimeUtc = DateTime.UtcNow };
+                            await foreach (ManifestFileEntry e in ManifestStore.StreamAsync(fx.Repository, job.ManifestKey!, job.Id, fx.DataKey, ct).ConfigureAwait(false))
+                            {
+                                string relative = Path.GetRelativePath(source, e.Path).Replace('/', '\\');
+                                e.Path = "C:\\Users\\me\\" + relative;
+                                windows.Files.Add(e);
+                            }
+                            string key = "manifests/pol_test/" + job.Id + ".windows.manifest";
+                            await fx.Repository.WriteObjectAsync(key, ManifestCodec.Encode(windows, fx.DataKey), ct).ConfigureAwait(false);
+                            job.ManifestKey = key;
+
+                            string restore = Path.Combine(ws.RootDirectory, "restore");
+                            await RestoreAllAsync(fx, job, restore, ct).ConfigureAwait(false);
+
+                            string top = Path.Combine(restore, "Users", "me", "top.txt");
+                            string note = Path.Combine(restore, "Users", "me", "docs", "deep", "note.txt");
+                            Check.True(File.Exists(top), "top-level file restored under the recreated folders");
+                            Check.True(File.Exists(note), "nested file restored under the recreated folders");
+                            Check.True(Equal(Content(90, 3000), File.ReadAllBytes(top)), "top-level file is byte-identical");
+                            Check.True(Equal(Content(91, 4000), File.ReadAllBytes(note)), "nested file is byte-identical");
+                        }
+                    }),
+
+                    Case("RestorePathMapping", "Restore paths map Windows and POSIX sources into the destination folder", async ct =>
+                    {
+                        string dest = Path.Combine(Path.GetTempPath(), "armor-dest");
+                        Check.Equal(Path.Combine(dest, "Users", "me", "a.txt"), RestorePathMapper.MapDestination("C:\\Users\\me\\a.txt", dest), "drive-letter path");
+                        Check.Equal(Path.Combine(dest, "Users", "me", "a.txt"), RestorePathMapper.MapDestination("d:/Users/me/a.txt", dest), "drive-letter path with forward slashes");
+                        Check.Equal(Path.Combine(dest, "dir", "a.txt"), RestorePathMapper.MapDestination("\\\\server\\share\\dir\\a.txt", dest), "UNC path drops server and share");
+                        Check.Equal(Path.Combine(dest, "dir", "a.txt"), RestorePathMapper.MapDestination("\\\\?\\C:\\dir\\a.txt", dest), "device path");
+                        Check.Equal(Path.Combine(dest, "dir", "a.txt"), RestorePathMapper.MapDestination("\\\\?\\UNC\\server\\share\\dir\\a.txt", dest), "device UNC path");
+                        Check.Equal(Path.Combine(dest, "home", "me", "a.txt"), RestorePathMapper.MapDestination("/home/me/a.txt", dest), "POSIX path");
+                        if (!OperatingSystem.IsWindows())
+                        {
+                            Check.Equal(Path.Combine(dest, "home", "odd\\name.txt"), RestorePathMapper.MapDestination("/home/odd\\name.txt", dest), "a backslash in a POSIX filename is kept");
+                            await Check.ThrowsAsync<ArmorException>(() => { RestorePathMapper.MapDestination("C:\\Users\\me\\a.txt", null); return Task.CompletedTask; }, "a Windows path cannot be restored in place off Windows").ConfigureAwait(false);
+                        }
+                        await Check.ThrowsAsync<ArmorException>(() => { RestorePathMapper.MapDestination("C:\\Users\\..\\..\\escape.txt", dest); return Task.CompletedTask; }, "parent-folder segments are refused").ConfigureAwait(false);
                     }),
 
                     Case("RestoreReportsProgress", "Restore reports progress with up-front totals and a full finish", async ct =>

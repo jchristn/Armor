@@ -57,6 +57,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   run only ever touches its own linked target; an unrelated offline device can no longer make it look
   like a reachable backup was blocked.
 
+### Fixed
+- **Restoring a Windows backup on macOS or Linux recreates its folders.** Restoring into a folder on a
+  Mac or Linux machine from a backup taken on Windows used to write every file straight into the
+  destination with its whole Windows path as the filename (e.g. `Code\Armor\README.md`), because a
+  backslash is not a folder separator there. Windows paths (drive-letter, UNC, and `\\?\` forms) are now
+  recognized on every platform, so the original folder tree is rebuilt under the destination. Restoring
+  a Windows backup to its *original location* on a non-Windows machine now fails with a clear message
+  asking you to choose a folder instead.
+
 ## [0.3.0] - 2026-08-29
 
 Exclude visibility, restore progress, and a paste fix in the TUI.
