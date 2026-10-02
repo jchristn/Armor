@@ -5,6 +5,7 @@ namespace Test.Shared
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Database;
+    using Armor.Core.Engine;
     using Armor.Core.Enums;
     using Armor.Core.Models;
     using Touchstone.Core;
@@ -104,6 +105,10 @@ namespace Test.Shared
                             List<ExcludePattern> seeded = await db.GlobalExcludes.ReadAllAsync(ct).ConfigureAwait(false);
                             Check.Equal(defaultCount, seeded.Count, "global list seeds with the defaults");
                             Check.Equal(ExcludeTargetEnum.Any, seeded[0].Target, "seeded defaults are Any-target bare names");
+                            Check.Equal(1, seeded.FindAll(p => p.IsRegex && p.Pattern.Contains("com\\.docker\\.docker")).Count, "the Docker Desktop rule is seeded once, not re-added by its own migration");
+                            ExcludeMatcher defaultsMatcher = new ExcludeMatcher(seeded);
+                            Check.True(defaultsMatcher.IsDirectoryExcluded("/Users/someone/Library/Containers/com.docker.docker"), "Docker Desktop's container is pruned");
+                            Check.False(defaultsMatcher.IsDirectoryExcluded("/Users/someone/Library/Containers/com.docker.dockerish"), "a similarly named container is not");
 
                             // The whole list is replaceable and preserves order and flags.
                             List<ExcludePattern> custom = new List<ExcludePattern>

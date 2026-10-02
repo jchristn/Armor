@@ -26,7 +26,8 @@ of every backup without you repeating the rules on each policy.
 
 ## What the global list excludes today
 
-These are the built-in defaults (all matched by name, as a file or folder).
+These are the built-in defaults (matched by name, as a file or folder, unless shown as a `re:` path
+regex).
 
 ### Cross-platform — developer & build output
 `.git` · `bin` · `obj` · `debug` · `release` · `node_modules` · `.vs` · `packages` · `.nuget` ·
@@ -42,6 +43,11 @@ These are the built-in defaults (all matched by name, as a file or folder).
 ### macOS
 `.DS_Store` · `.Spotlight-V100` · `.fseventsd` · `.DocumentRevisions-V100` · `.TemporaryItems` ·
 `.Trashes`
+
+`re:.*/Library/Containers/com\.docker\.docker(/.*)?$` — Docker Desktop's container
+(`~/Library/Containers/com.docker.docker`). It holds the Docker VM's disk image: tens of gigabytes,
+rewritten constantly while Docker runs, and reading it while Docker starts can stall Docker's startup.
+Back up your images and volumes with Docker's own tools instead.
 
 ### Linux
 `lost+found` · `.thumbnails`

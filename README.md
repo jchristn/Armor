@@ -141,7 +141,7 @@ gap at the worst possible moment:
 
 1. **Review the exclude lists before your first run.** Armor ships a shared **global exclude
    list** — build output, package and tool caches, `AppData`, OS-generated metadata (`.DS_Store`,
-   `Thumbs.db`, `lost+found`, and the like) — managed centrally (press <kbd>g</kbd> to see and
+   `Thumbs.db`, `lost+found`, and the like), Docker Desktop's VM image on macOS — managed centrally (press <kbd>g</kbd> to see and
    edit it). When you create a policy, that list is copied into the policy's own excludes so you
    can see and adjust exactly what it skips, right there in the create flow. These defaults are
    deliberately conservative, but only you know your data: skim your policy's excludes and make

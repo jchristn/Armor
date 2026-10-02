@@ -292,6 +292,19 @@ namespace Armor.Core.Database.Sqlite
                     "ALTER TABLE backup_jobs ADD COLUMN progress_bytes_total INTEGER NOT NULL DEFAULT 0;"
                 }));
 
+            migrations.Add(new SchemaMigration(
+                11,
+                "Global exclude for Docker Desktop's macOS container",
+                new List<string>
+                {
+                    // Append the Docker Desktop rule to existing global lists. A database created after this
+                    // rule joined the defaults already has it from migration 6, so the insert is skipped.
+                    "INSERT INTO global_exclude_patterns (ordinal, pattern, is_regex, target) " +
+                    "SELECT (SELECT COALESCE(MAX(ordinal), -1) + 1 FROM global_exclude_patterns), " +
+                    Sanitizer.Literal(GlobalExcludeDefaults.DockerDesktopContainer) + ", 1, 'Any' " +
+                    "WHERE NOT EXISTS (SELECT 1 FROM global_exclude_patterns WHERE pattern = " + Sanitizer.Literal(GlobalExcludeDefaults.DockerDesktopContainer) + ");"
+                }));
+
             return migrations;
         }
 

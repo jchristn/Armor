@@ -7,6 +7,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Docker Desktop's macOS container is a global exclude.** `~/Library/Containers/com.docker.docker`
+  (the Docker VM's disk image and state) joins the built-in global exclude list. Scanning it is slow,
+  backs up a constantly changing multi-gigabyte image, and can stall Docker's startup when Docker is
+  launched mid-scan. Existing global lists gain the rule automatically on upgrade.
 - **Backup targets show a URL-style location.** The **Location** column in the Backup targets list (and
   the Recover chooser) now shows a scheme-prefixed address for every target type — `s3://bucket`,
   `azure://container`, `google://bucket`, `smb://host/share`, `nfs://host/export`, or the plain path for

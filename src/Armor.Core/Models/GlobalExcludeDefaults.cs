@@ -7,9 +7,10 @@ namespace Armor.Core.Models
     /// The canonical set of exclude rules seeded into the shared global exclude list, and used by the
     /// TUI's "restore defaults" action. These are the directories that dominate a developer machine's
     /// file count — source-control metadata, build output, package and tool caches, and the user's
-    /// <c>AppData</c> tree — none of which belong in a backup. Every entry is a bare name with
-    /// <see cref="ExcludeTargetEnum.Any"/>, so it excludes both a file and a directory of that name and
-    /// prunes a matching directory from the walk rather than descending into it. This type is stateless.
+    /// <c>AppData</c> tree — none of which belong in a backup. Every entry targets
+    /// <see cref="ExcludeTargetEnum.Any"/>, so it excludes both a file and a directory and prunes a matching
+    /// directory from the walk rather than descending into it. Most entries are bare names; a few
+    /// location-specific ones are full-path regular expressions. This type is stateless.
     /// </summary>
     public static class GlobalExcludeDefaults
     {
@@ -37,15 +38,33 @@ namespace Armor.Core.Models
         };
 
         /// <summary>
+        /// Regular expressions matched against the full path (forward slashes), for rules that only make sense
+        /// at one location.
+        /// </summary>
+        private static readonly string[] _Regexes =
+        {
+            // Docker Desktop's macOS VM disk image and state. Tens of gigabytes, rewritten constantly while
+            // Docker runs, and reading it while the VM is starting can wedge Docker's startup.
+            DockerDesktopContainer,
+        };
+
+        /// <summary>
+        /// Full-path regular expression excluding Docker Desktop's macOS container (~/Library/Containers/com.docker.docker).
+        /// </summary>
+        internal const string DockerDesktopContainer = @".*/Library/Containers/com\.docker\.docker(/.*)?$";
+
+        /// <summary>
         /// Build a fresh list of the default global exclude patterns. A new list of new instances is
         /// returned on each call so callers may mutate the result freely.
         /// </summary>
         /// <returns>The default exclude patterns.</returns>
         public static List<ExcludePattern> Create()
         {
-            List<ExcludePattern> patterns = new List<ExcludePattern>(_Names.Length);
+            List<ExcludePattern> patterns = new List<ExcludePattern>(_Names.Length + _Regexes.Length);
             foreach (string name in _Names)
                 patterns.Add(new ExcludePattern(name, false, ExcludeTargetEnum.Any));
+            foreach (string regex in _Regexes)
+                patterns.Add(new ExcludePattern(regex, true, ExcludeTargetEnum.Any));
             return patterns;
         }
     }
