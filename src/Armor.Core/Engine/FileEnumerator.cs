@@ -129,9 +129,32 @@ namespace Armor.Core.Engine
 
                 foreach (DirectoryInfo subdirectory in subdirectories)
                 {
+                    // Never descend through a directory symlink or junction. Following them re-walks trees
+                    // reached elsewhere (macOS gives every sandboxed app in ~/Library/Containers links back
+                    // to Desktop, Downloads, Pictures, ...) and loops forever on a link to an ancestor.
+                    // LinkTarget is null for cloud-file placeholders, so OneDrive folders are still walked.
+                    if (IsLink(subdirectory))
+                        continue;
+
                     if (!matcher.IsDirectoryExcluded(subdirectory.FullName))
                         pending.Push(subdirectory.FullName);
                 }
+            }
+        }
+
+        private static bool IsLink(DirectoryInfo directory)
+        {
+            try
+            {
+                return directory.LinkTarget != null;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
             }
         }
 

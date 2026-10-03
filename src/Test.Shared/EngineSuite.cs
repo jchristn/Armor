@@ -368,6 +368,40 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("DirectorySymlinksNotFollowed", "The walk does not descend through directory symlinks", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (EngineFixture fx = await EngineFixture.BuildAsync(ws, ct).ConfigureAwait(false))
+                        {
+                            string source = Path.Combine(ws.RootDirectory, "source");
+                            string pictures = Path.Combine(source, "Pictures");
+                            string containerData = Path.Combine(source, "Containers", "app", "Data");
+                            string containerLink = Path.Combine(containerData, "Pictures");
+                            string loopLink = Path.Combine(source, "loop");
+
+                            WriteFile(pictures, "a.jpg", Content(90, 2000));
+                            WriteFile(pictures, "b.jpg", Content(91, 2000));
+                            // Mirrors ~/Library/Containers/<app>/Data/Pictures -> ../../../../Pictures, plus a
+                            // link back to the root that would otherwise loop.
+                            Directory.CreateDirectory(containerData);
+                            try
+                            {
+                                Directory.CreateSymbolicLink(containerLink, pictures);
+                                Directory.CreateSymbolicLink(loopLink, source);
+                            }
+                            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+                            {
+                                // Creating symlinks needs elevation or developer mode on Windows.
+                                return;
+                            }
+
+                            Policy policy = NewPolicy(source);
+                            BackupEngine backup = new BackupEngine(fx.Database);
+                            BackupJob job = await backup.RunAsync(policy, fx.Repository, fx.StorageTargetId, fx.EncryptionKey, fx.DataKey, fx.Chunking, BackupTypeEnum.Full, ct).ConfigureAwait(false);
+                            Check.Equal(2L, job.FileCount, "each picture is backed up once, never through a link");
+                        }
+                    }),
+
                     Case("ManifestStreamsAcrossSegments", "A manifest larger than one segment writes, reads, and deletes segment-by-segment", async ct =>
                     {
                         using (TempWorkspace ws = new TempWorkspace())
