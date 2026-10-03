@@ -6,6 +6,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-03
+
+Observability, tray-started backups, scheduler backoff, and dependency updates.
+
 ### Added
 - **Observability: metrics, traces, and logs for Grafana.** The engine now emits through a .NET
   `Meter` and `ActivitySource` named `Armor`: backup jobs and every pipeline stage (prepare, open, header,
@@ -60,6 +64,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   log is still mirrored to `~/.armor/logs/armor.log.<date>` on disk.
 
 ### Changed
+- **Dependency updates.** `Blobject.*` storage providers 6.0.0 → 6.1.0, `SyslogLogging` 2.2.2 → 2.3.1,
+  `TUIKit` 1.1.1 → 1.2.0, and the `Touchstone` test packages (`Core`, `Cli`, `XunitAdapter`,
+  `NunitAdapter`) 0.1.12 → 0.2.0. `SQLitePCLRaw.bundle_e_sqlite3` stays on 2.1.13: Microsoft.Data.Sqlite
+  10 is built against SQLitePCLRaw 2.1, and 3.x is a breaking major. No vulnerable packages remain
+  (including transitive). The product version in `src/Directory.Build.props` moves to 0.4.0 (it had not
+  been bumped for 0.3.0).
 - **An agent-run backup shows a real progress bar in the TUI.** A run driven by the background agent
   now draws the same progress bar (percentage, files, bytes, and the scanning phase) as a backup
   started locally in the TUI, instead of a static "in progress" line. The engine flushes live progress

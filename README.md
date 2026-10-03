@@ -14,7 +14,8 @@ and compresses them, encrypts every block with AES-256-GCM, and writes the resul
 to whatever target you trust the least — a USB drive, a file share, or a cloud
 bucket — in a form that only your password can reconstruct.
 
-> **Status:** the engine and both applications are built and tested end to end. See
+> **Status:** version 0.4.0 — the engine and both applications are built and tested end to end. See
+> [`CHANGELOG.md`](CHANGELOG.md) for release notes and
 > [`archive/ARMOR_PLAN.md`](archive/ARMOR_PLAN.md) for the build plan and per-phase progress.
 
 ## Why Armor
