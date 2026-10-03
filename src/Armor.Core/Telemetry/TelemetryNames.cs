@@ -525,6 +525,9 @@ namespace Armor.Core.Telemetry
         /// <summary>Scheduler decision: the backup failed (left due).</summary>
         public const string DecisionFailed = "failed";
 
+        /// <summary>Scheduler decision: a recent failure is still backing off (left due).</summary>
+        public const string DecisionBackoff = "backoff";
+
         /// <summary>Key operation: provision a new key.</summary>
         public const string KeyOpProvision = "provision";
 

@@ -20,6 +20,7 @@ namespace Armor.Agent
     public sealed class AgentHost
     {
         private readonly Dictionary<string, byte[]> _KeyCache = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        private readonly HashSet<string> _FailingSchedules = new HashSet<string>(StringComparer.Ordinal);
         private CancellationTokenSource? _Cts;
         private ArmorContext? _Context;
         private CancellationToken _Token;
@@ -84,8 +85,12 @@ namespace Armor.Agent
                             policy => KeyProviderAsync(current, policy, token),
                             DateTime.UtcNow,
                             token,
-                            (schedule, ex) => NotifyBackupFailed(null, ex),
-                            (schedule, policy, job) => NotifyBackupCompleted(policy, job)).ConfigureAwait(false);
+                            (schedule, ex) => NotifyScheduledBackupFailed(schedule, ex),
+                            (schedule, policy, job) =>
+                            {
+                                _FailingSchedules.Remove(schedule.Id);
+                                NotifyBackupCompleted(policy, job);
+                            }).ConfigureAwait(false);
                         SetStatus(ran > 0 ? "Ran " + ran + " backup(s)" : "Idle");
                     }
                     catch (OperationCanceledException)
@@ -228,6 +233,19 @@ namespace Armor.Agent
             string title = String.IsNullOrEmpty(policyName) ? "Armor — backup failed" : "Armor — backup failed: " + policyName;
             SetStatus((String.IsNullOrEmpty(policyName) ? "A scheduled backup failed: " : "Backup of '" + policyName + "' failed: ") + ex.Message);
             DesktopNotifier.Notify(title, ex.Message);
+        }
+
+        private void NotifyScheduledBackupFailed(Schedule schedule, Exception ex)
+        {
+            // The scheduler retries a failing schedule (with backoff) until it succeeds. Raise a desktop
+            // notification only for the first failure of a streak; later retries just update the status, so
+            // a persistent failure does not flood the desktop. A success clears the streak.
+            if (_FailingSchedules.Add(schedule.Id))
+            {
+                NotifyBackupFailed(null, ex);
+                return;
+            }
+            SetStatus("A scheduled backup is still failing (retrying with backoff): " + ex.Message);
         }
 
         private async Task<byte[]?> KeyProviderAsync(ArmorContext context, Policy policy, CancellationToken token)

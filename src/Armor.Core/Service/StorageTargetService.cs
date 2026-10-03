@@ -150,6 +150,13 @@ namespace Armor.Core.Service
             if (String.IsNullOrEmpty(root))
                 return;
 
+            // On macOS and Linux a removable drive is mounted under a mount-point directory (/Volumes/USB,
+            // /media/<user>/USB, ...) rather than a drive letter, so the root check below is a no-op. When the
+            // drive is unplugged the volume's directory disappears; detect that before the repository tries
+            // to create the path (which fails with a permission error and would be reported as a failure).
+            if (!OperatingSystem.IsWindows() && IsUnderMissingMountPoint(target.DiskPath!))
+                throw new TargetUnreachableException("Backup target '" + target.Name + "' is not reachable — the volume for " + target.DiskPath + " is not mounted. If it is a removable drive, make sure it is connected.");
+
             try
             {
                 // On Windows this is a drive letter (e.g. "E:\") that reports not-ready when absent.
@@ -166,6 +173,40 @@ namespace Armor.Core.Service
             {
                 throw new TargetUnreachableException("Backup target '" + target.Name + "' is not reachable — the drive " + root + " is not ready.");
             }
+        }
+
+        /// <summary>
+        /// Whether a Unix disk path lives on a volume that is not mounted: the path does not exist and its
+        /// nearest existing ancestor is a mount-point parent (/Volumes, /media, /mnt, /run/media, or a
+        /// per-user directory directly beneath /media or /run/media). A path whose nearest existing ancestor
+        /// is anywhere else is an ordinary directory that is safe to create.
+        /// </summary>
+        /// <param name="diskPath">The target's disk path.</param>
+        /// <returns>True when the path's volume appears to be unmounted.</returns>
+        internal static bool IsUnderMissingMountPoint(string diskPath)
+        {
+            string full;
+            try
+            {
+                full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(diskPath));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+            if (Directory.Exists(full))
+                return false;
+
+            string? ancestor = Path.GetDirectoryName(full);
+            while (!String.IsNullOrEmpty(ancestor) && !Directory.Exists(ancestor))
+                ancestor = Path.GetDirectoryName(ancestor);
+            if (String.IsNullOrEmpty(ancestor))
+                return false;
+
+            if (ancestor == "/Volumes" || ancestor == "/media" || ancestor == "/mnt" || ancestor == "/run/media")
+                return true;
+            string? parent = Path.GetDirectoryName(ancestor);
+            return parent == "/media" || parent == "/run/media";
         }
 
         /// <summary>

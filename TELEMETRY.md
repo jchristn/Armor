@@ -244,7 +244,7 @@ The host also exports Radiant's runtime and process instruments (`dotnet_gc_*`, 
 | `armor_backup_type` | `full`, `incremental`, `differential` |
 | `armor_storage_type` | `disk`, `amazon_s3`, `azure_blob`, `google_cloud`, `cifs`, `nfs` |
 | `armor_storage_operation` | `validate`, `write_object`, `read_object`, `object_exists`, `delete_object`, `enumerate`, `write_chunk`, `read_chunk`, `chunk_exists`, `delete_chunk` |
-| `armor_scheduler_decision` | `ran`; left due: `key_unavailable`, `target_unreachable`, `already_running`, `failed`; skipped forward: `policy_disabled`; also `disabled`, `initialized`, `not_due` |
+| `armor_scheduler_decision` | `ran`; left due: `key_unavailable`, `target_unreachable`, `already_running`, `failed`, `backoff`; skipped forward: `policy_disabled`; also `disabled`, `initialized`, `not_due` |
 | `armor_component` | `backup`, `source` (an unreadable file, skipped), `restore`, `verify`, `retention`, `scheduler`, `storage`, `key`, `recovery` |
 
 Failures inside the engine are counted once by the engine (`armor_backup_jobs_total{armor_outcome="failure"}`

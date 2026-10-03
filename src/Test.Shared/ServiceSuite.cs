@@ -751,6 +751,102 @@ namespace Test.Shared
                             List<BackupJob> offlineJobs = await context.Database.BackupJobs.ReadByPolicyAsync(offlinePolicy.Id, ct).ConfigureAwait(false);
                             Check.Equal(0, offlineJobs.Count, "no job row was created for the offline target");
                         }
+                    }),
+
+                    Case("SchedulerSkipsUnmountedUnixVolume", "A disk target on an unmounted macOS/Linux volume is skipped (not failed)", async ct =>
+                    {
+                        // On macOS and Linux a removable drive is a mount point (/Volumes/USB, /mnt/usb) rather
+                        // than a drive letter. When it is unplugged the backup must be treated as unreachable —
+                        // not a failure that raises a notification on every tick.
+                        string mountParent = OperatingSystem.IsMacOS() ? "/Volumes" : "/mnt";
+                        if (OperatingSystem.IsWindows() || !Directory.Exists(mountParent))
+                            return;
+
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (ArmorContext context = await ArmorContext.CreateAsync(new ArmorPaths(ws.Combine("home")), ct).ConfigureAwait(false))
+                        {
+                            SmallChunking(context);
+                            EncryptionKeyService keyService = new EncryptionKeyService(context.Database);
+                            ProvisionedKey provisioned = await keyService.ProvisionAsync("sch-key", "pw", null, 50000, ct).ConfigureAwait(false);
+                            StorageTargetService targetService = new StorageTargetService(context.Database, context.CredentialProtector);
+
+                            string missingVolume = mountParent + "/armor-absent-" + Guid.NewGuid().ToString("N");
+                            StorageTarget offline = new StorageTarget { Name = "usb", Type = StorageTargetTypeEnum.Disk, DiskPath = missingVolume + "/Armor" };
+                            await targetService.CreateAsync(offline, ct).ConfigureAwait(false);
+                            string src = ws.Combine("usb-src");
+                            WriteFile(src, "a.txt", Content(13, 4000));
+                            Policy policy = new Policy { Name = "usb-policy" };
+                            policy.IncludePaths.Add(src);
+                            policy.StorageTargetId = offline.Id;
+                            policy.EncryptionKeyId = provisioned.Key.Id;
+                            await context.Database.Policies.CreateAsync(policy, ct).ConfigureAwait(false);
+                            Schedule schedule = new Schedule { PolicyId = policy.Id, CronExpression = "*/5 * * * *", NextRunUtc = DateTime.UtcNow.AddMinutes(-1) };
+                            await context.Database.Schedules.CreateAsync(schedule, ct).ConfigureAwait(false);
+
+                            int errors = 0;
+                            SchedulerService scheduler = new SchedulerService(context);
+                            int ran = await scheduler.TickAsync(_ => Task.FromResult<byte[]?>(provisioned.DataKey), DateTime.UtcNow, ct, (_, __) => errors++).ConfigureAwait(false);
+
+                            Check.Equal(0, ran, "nothing ran");
+                            Check.Equal(0, errors, "the unmounted volume reported no failure");
+                            Check.False(Directory.Exists(missingVolume), "the missing volume directory was not created");
+                            List<BackupJob> jobs = await context.Database.BackupJobs.ReadByPolicyAsync(policy.Id, ct).ConfigureAwait(false);
+                            Check.Equal(0, jobs.Count, "no job row was created for the unmounted target");
+                        }
+                    }),
+
+                    Case("SchedulerBacksOffFailingSchedule", "A failing schedule is retried with exponential backoff, not every tick", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (ArmorContext context = await ArmorContext.CreateAsync(new ArmorPaths(ws.Combine("home")), ct).ConfigureAwait(false))
+                        {
+                            SmallChunking(context);
+                            EncryptionKeyService keyService = new EncryptionKeyService(context.Database);
+                            ProvisionedKey provisioned = await keyService.ProvisionAsync("sch-key", "pw", null, 50000, ct).ConfigureAwait(false);
+                            StorageTargetService targetService = new StorageTargetService(context.Database, context.CredentialProtector);
+                            BackupService backupService = new BackupService(context);
+
+                            // A target that will fail: back it up once, then remove its header.
+                            StorageTarget badTarget = new StorageTarget { Name = "bad", Type = StorageTargetTypeEnum.Disk, DiskPath = ws.Combine("bad-repo") };
+                            await targetService.CreateAsync(badTarget, ct).ConfigureAwait(false);
+                            string badSrc = ws.Combine("bad-src");
+                            WriteFile(badSrc, "x.txt", Content(14, 4000));
+                            Policy badPolicy = new Policy { Name = "bad-policy" };
+                            badPolicy.IncludePaths.Add(badSrc);
+                            badPolicy.StorageTargetId = badTarget.Id;
+                            badPolicy.EncryptionKeyId = provisioned.Key.Id;
+                            await context.Database.Policies.CreateAsync(badPolicy, ct).ConfigureAwait(false);
+                            await backupService.RunAsync(badPolicy.Id, provisioned.DataKey, BackupTypeEnum.Full, true, ct).ConfigureAwait(false);
+                            IStorageRepository badRepo = await targetService.BuildRepositoryAsync(badTarget.Id, ct).ConfigureAwait(false);
+                            await badRepo.DeleteObjectAsync(RepositoryKeys.HeaderKey, ct).ConfigureAwait(false);
+
+                            DateTime t0 = DateTime.UtcNow;
+                            Schedule schedule = new Schedule { PolicyId = badPolicy.Id, CronExpression = "*/5 * * * *", NextRunUtc = t0.AddMinutes(-1) };
+                            await context.Database.Schedules.CreateAsync(schedule, ct).ConfigureAwait(false);
+
+                            int errors = 0;
+                            SchedulerService scheduler = new SchedulerService(context);
+                            Func<Policy, Task<byte[]?>> keys = _ => Task.FromResult<byte[]?>(provisioned.DataKey);
+
+                            await scheduler.TickAsync(keys, t0, ct, (_, __) => errors++).ConfigureAwait(false);
+                            Check.Equal(1, errors, "first tick attempts and fails");
+
+                            await scheduler.TickAsync(keys, t0.AddSeconds(30), ct, (_, __) => errors++).ConfigureAwait(false);
+                            Check.Equal(1, errors, "a tick inside the first backoff window does not retry");
+
+                            DateTime t1 = t0 + SchedulerService.InitialBackoff + TimeSpan.FromSeconds(1);
+                            await scheduler.TickAsync(keys, t1, ct, (_, __) => errors++).ConfigureAwait(false);
+                            Check.Equal(2, errors, "retried once the first backoff elapsed");
+
+                            await scheduler.TickAsync(keys, t1 + SchedulerService.InitialBackoff + TimeSpan.FromSeconds(1), ct, (_, __) => errors++).ConfigureAwait(false);
+                            Check.Equal(2, errors, "the second backoff is longer than the first");
+
+                            await scheduler.TickAsync(keys, t1 + SchedulerService.InitialBackoff + SchedulerService.InitialBackoff + TimeSpan.FromSeconds(1), ct, (_, __) => errors++).ConfigureAwait(false);
+                            Check.Equal(3, errors, "retried once the doubled backoff elapsed");
+
+                            Schedule reloaded = (await context.Database.Schedules.ReadAsync(schedule.Id, ct).ConfigureAwait(false))!;
+                            Check.True(reloaded.NextRunUtc.HasValue && reloaded.NextRunUtc.Value <= t0, "the failing schedule remained due");
+                        }
                     })
                 });
         }

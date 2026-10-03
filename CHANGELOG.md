@@ -77,6 +77,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   like a reachable backup was blocked.
 
 ### Fixed
+- **No more flood of "backup failed" notifications for a missing target.** On macOS and Linux, a disk
+  target on an unmounted volume (`/Volumes/<drive>`, `/media/...`, `/mnt/...`, `/run/media/...`) is now
+  treated as unreachable, as an unplugged drive letter already was on Windows. The scheduled backup is
+  left due and runs once the drive is reconnected, with no failure and no notification. Before, Armor
+  tried to create the path, hit a permission error, and showed a notification every scheduler tick. Other
+  scheduled backup failures are now retried with exponential backoff (1 minute, doubling up to 1 hour)
+  instead of on every tick. The agent shows a desktop notification only for the first failure of a
+  streak, and a successful run resets it. A new `backoff` scheduler decision is counted in telemetry.
 - **The tray icon is back.** Since the move to Avalonia 12 the agent's tray icon never appeared, because
   Avalonia 12 only creates a tray icon that is registered with the application. On macOS the agent also
   no longer shows a blank Dock tile — it lives only in the menu bar — and its menu-bar icon uses the

@@ -369,7 +369,7 @@
     {
       "type": "timeseries",
       "title": "Decisions per schedule",
-      "description": "ran; left due: key_unavailable, target_unreachable, already_running, failed; skipped forward: policy_disabled; disabled; initialized. not_due is hidden.",
+      "description": "ran; left due: key_unavailable, target_unreachable, already_running, failed, backoff; skipped forward: policy_disabled; disabled; initialized. not_due is hidden.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

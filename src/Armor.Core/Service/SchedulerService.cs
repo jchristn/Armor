@@ -14,12 +14,27 @@ namespace Armor.Core.Service
     /// Evaluates schedules and runs the ones that are due. One tick is a pure, injectable operation:
     /// the current time and a key provider are passed in, so the agent's timer loop stays a thin
     /// wrapper and the decision logic is testable. A schedule whose policy's data key is unavailable is
-    /// left due so it runs as soon as the key is unlocked, rather than being skipped forward.
+    /// left due so it runs as soon as the key is unlocked, rather than being skipped forward. A schedule
+    /// whose backup fails is also left due, but retried with exponential backoff (doubling from
+    /// <see cref="InitialBackoff"/> up to <see cref="MaxBackoff"/>) so a persistent failure is not retried,
+    /// recorded, and reported on every tick. Backoff state is held in memory and resets when the instance
+    /// is recreated; reuse one instance across ticks for it to take effect.
     /// </summary>
     public sealed class SchedulerService
     {
+        /// <summary>
+        /// Delay before the first retry of a failed schedule.
+        /// </summary>
+        public static readonly TimeSpan InitialBackoff = TimeSpan.FromMinutes(1);
+
+        /// <summary>
+        /// Upper bound on the delay between retries of a failing schedule.
+        /// </summary>
+        public static readonly TimeSpan MaxBackoff = TimeSpan.FromHours(1);
+
         private readonly ArmorContext _Context;
         private readonly ScheduleEvaluator _Evaluator = new ScheduleEvaluator();
+        private readonly Dictionary<string, FailureState> _Failures = new Dictionary<string, FailureState>(StringComparer.Ordinal);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SchedulerService"/> class.
@@ -118,6 +133,14 @@ namespace Armor.Core.Service
                     continue;
                 }
 
+                FailureState? failure;
+                if (_Failures.TryGetValue(schedule.Id, out failure) && nowUtc < failure.RetryAtUtc)
+                {
+                    RecordDecision(TelemetryNames.DecisionBackoff);
+                    counts.Pending++;
+                    continue;
+                }
+
                 Policy? policy = await _Context.Database.Policies.ReadAsync(schedule.PolicyId, token).ConfigureAwait(false);
                 if (policy == null || !policy.Enabled)
                 {
@@ -167,15 +190,18 @@ namespace Armor.Core.Service
                 }
                 catch (Exception ex)
                 {
-                    // One policy's failure (for example an unreachable target) must not abort the tick
-                    // or starve the other schedules. Leave this one due so it retries next tick — and
-                    // runs the moment the target is reachable again.
+                    // One policy's failure (for example a remote target that cannot be contacted) must not
+                    // abort the tick or starve the other schedules. Leave this one due, but back off before
+                    // retrying so a persistent failure is not retried and reported on every tick.
                     RecordDecision(TelemetryNames.DecisionFailed);
                     counts.Pending++;
+                    TimeSpan delay = NoteFailure(schedule.Id, nowUtc);
+                    Diagnostics.ArmorLog.Debug("Backup for policy '" + policy.Name + "' failed; retrying in " + delay + ".");
                     onError?.Invoke(schedule, ex);
                     continue;
                 }
 
+                _Failures.Remove(schedule.Id);
                 _Evaluator.MarkRan(schedule, nowUtc);
                 await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
                 ran += 1;
@@ -196,11 +222,35 @@ namespace Armor.Core.Service
             return ran;
         }
 
+        private TimeSpan NoteFailure(string scheduleId, DateTime nowUtc)
+        {
+            FailureState? state;
+            if (!_Failures.TryGetValue(scheduleId, out state))
+            {
+                state = new FailureState();
+                _Failures[scheduleId] = state;
+            }
+            state.Count++;
+
+            // InitialBackoff doubled per consecutive failure, capped (the exponent is bounded to avoid overflow).
+            double factor = Math.Pow(2, Math.Min(state.Count - 1, 16));
+            TimeSpan delay = TimeSpan.FromTicks((long)Math.Min(InitialBackoff.Ticks * factor, MaxBackoff.Ticks));
+            state.RetryAtUtc = nowUtc + delay;
+            return delay;
+        }
+
         private static void RecordDecision(string decision)
         {
             TagList tags = new TagList();
             tags.Add(TelemetryNames.AttrSchedulerDecision, decision);
             ArmorTelemetry.Add(ArmorTelemetry.SchedulerDecisions, 1, tags);
+        }
+
+        private sealed class FailureState
+        {
+            internal int Count { get; set; } = 0;
+
+            internal DateTime RetryAtUtc { get; set; } = DateTime.MinValue;
         }
     }
 }
