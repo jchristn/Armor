@@ -5,6 +5,7 @@ namespace Armor.Core.Storage
     using Armor.Core.Enums;
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
+    using Armor.Core.Telemetry;
     using Blobject.AmazonS3;
     using Blobject.AzureBlob;
     using Blobject.CIFS;
@@ -39,7 +40,11 @@ namespace Armor.Core.Storage
             // store before filtering, which is unusably slow (it made recovery hang) on a repository holding
             // millions of chunk objects.
             string? localRoot = target.Type == StorageTargetTypeEnum.Disk ? target.DiskPath : null;
-            return new BlobStorageRepository(client, target.RepositoryRoot, localRoot);
+            BlobStorageRepository repository = new BlobStorageRepository(client, target.RepositoryRoot, localRoot);
+
+            // Every production repository is wrapped so each call to the target records integration
+            // telemetry (counts, latency, bytes, and a client span) tagged with the bounded target type.
+            return new InstrumentedStorageRepository(repository, ArmorTelemetry.StorageTypeLabel(target.Type));
         }
 
         private static BlobClientBase CreateClient(StorageTarget target)

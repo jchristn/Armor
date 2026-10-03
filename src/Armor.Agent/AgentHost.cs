@@ -8,6 +8,7 @@ namespace Armor.Agent
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
     using Armor.Core.Service;
+    using Armor.Telemetry;
 
     /// <summary>
     /// The agent's background worker. It opens the shared runtime context and loops on the configured
@@ -57,12 +58,19 @@ namespace Armor.Agent
         private async Task RunLoopAsync(CancellationToken token)
         {
             ArmorContext? context = null;
+            TelemetryHost? telemetry = null;
             try
             {
                 context = await ArmorContext.CreateAsync(null, token, message => SetStatus(message)).ConfigureAwait(false);
+
+                // The agent's single telemetry host, subscribed to the Armor meter and activity source. Inert
+                // unless Telemetry.Enabled is set in armor.json; never throws.
+                telemetry = TelemetryHost.Start(context.Settings.Telemetry, "agent", context.Settings.Telemetry.AgentPrometheusPort);
                 _Context = context;
                 _Token = token;
-                await new StartupMaintenance(context).ReconcileInterruptedBackupsAsync(token).ConfigureAwait(false);
+                StartupMaintenance maintenance = new StartupMaintenance(context);
+                await maintenance.ReconcileInterruptedBackupsAsync(token).ConfigureAwait(false);
+                await maintenance.PublishLastBackupSuccessAsync(token).ConfigureAwait(false);
                 SchedulerService scheduler = new SchedulerService(context);
                 int tickSeconds = context.Settings.SchedulerTickSeconds;
 
@@ -109,6 +117,7 @@ namespace Armor.Agent
             finally
             {
                 _Context = null;
+                telemetry?.Dispose();
                 context?.Dispose();
             }
         }

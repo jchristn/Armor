@@ -57,6 +57,23 @@ namespace Armor.Core.Configuration
         private ChunkingSettings _Chunking = new ChunkingSettings();
 
         /// <summary>
+        /// Telemetry export configuration. Never null; assigning null replaces it with defaults (export off).
+        /// </summary>
+        public TelemetrySettings Telemetry
+        {
+            get
+            {
+                return _Telemetry;
+            }
+            set
+            {
+                _Telemetry = value ?? new TelemetrySettings();
+            }
+        }
+
+        private TelemetrySettings _Telemetry = new TelemetrySettings();
+
+        /// <summary>
         /// Maximum number of files processed concurrently by the backup engine. Default is 4. Clamped
         /// to the range 1 to 64.
         /// </summary>

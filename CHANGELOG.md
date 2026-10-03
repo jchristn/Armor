@@ -7,6 +7,21 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Observability: metrics, traces, and logs for Grafana.** The engine now emits through a .NET
+  `Meter` and `ActivitySource` named `Armor`: backup jobs and every pipeline stage (prepare, open, header,
+  baseline, scan, process, manifest, finalize, retention) with per-stage latency histograms; the per-file
+  and per-chunk work inside the copy stage (queued, read, hash, frame, dedupe check, upload, commit);
+  files, bytes, chunk deduplication, worker and queue saturation; restores, verification (missing and
+  corrupt chunks), retention, the scheduler's per-schedule decisions and liveness, key operations,
+  disaster recovery, every storage-target call (count, latency, bytes, and a client span, by target type
+  and operation), errors by component and type, a last-successful-backup timestamp, and build and safe
+  configuration gauges. One trace covers a scheduled tick from the scheduler down to each storage call.
+  A new `Armor.Telemetry` host (built on the Radiant 0.1.2 package) is started by the agent and the TUI;
+  set `Telemetry.Enabled` in `armor.json` (or `ARMOR_TELEMETRY_ENABLED=true`) to export over OTLP, with
+  an optional in-process Prometheus endpoint and Loki, plus .NET runtime metrics and trace-correlated
+  logs. Export is off by default. `docker/compose.yaml` brings up a pinned OpenTelemetry Collector,
+  Prometheus (with recommended alert rules), Tempo, Loki, and Grafana with six provisioned dashboards in
+  an **Armor** folder. See [`TELEMETRY.md`](TELEMETRY.md).
 - **Docker Desktop's macOS container is a global exclude.** `~/Library/Containers/com.docker.docker`
   (the Docker VM's disk image and state) joins the built-in global exclude list. Scanning it is slow,
   backs up a constantly changing multi-gigabyte image, and can stall Docker's startup when Docker is

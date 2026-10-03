@@ -31,7 +31,8 @@ dotnet build src/Armor.sln -c Release
 ```
 
 That compiles the engine (`Armor.Core`), the terminal console (`Armor.Tui`), the
-background agent (`Armor.Agent`), and the test projects. If you want to confirm your
+background agent (`Armor.Agent`), the telemetry host they share (`Armor.Telemetry`; see
+[`TELEMETRY.md`](TELEMETRY.md) to watch Armor in Grafana), and the test projects. If you want to confirm your
 build is healthy before trusting it with data, run the suite:
 
 ```bash

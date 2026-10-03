@@ -5,6 +5,7 @@ namespace Armor.Core.Security
     using System.Text;
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// Provisions and unlocks repository data keys. A single random 256-bit data key encrypts a
@@ -33,6 +34,24 @@ namespace Armor.Core.Security
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="name"/> is null or whitespace.</exception>
         /// <exception cref="ArgumentException">Thrown when neither a passphrase nor a key file is supplied.</exception>
         public ProvisionedKey Provision(string name, string? passphrase, byte[]? keyFileBytes, int iterations = 600000)
+        {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.KeyOpProvision))
+            {
+                try
+                {
+                    ProvisionedKey provisioned = ProvisionCore(name, passphrase, keyFileBytes, iterations);
+                    operation.Succeed();
+                    return provisioned;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private ProvisionedKey ProvisionCore(string name, string? passphrase, byte[]? keyFileBytes, int iterations)
         {
             if (String.IsNullOrWhiteSpace(name))
                 throw new ArgumentNullException(nameof(name));
@@ -94,6 +113,24 @@ namespace Armor.Core.Security
         /// <exception cref="ArmorCryptoException">Thrown when the key is not passphrase-protected or the passphrase is wrong.</exception>
         public byte[] UnlockWithPassphrase(EncryptionKey entry, string passphrase)
         {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.KeyOpUnlockPassphrase))
+            {
+                try
+                {
+                    byte[] dataKey = UnlockWithPassphraseCore(entry, passphrase);
+                    operation.Succeed();
+                    return dataKey;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private static byte[] UnlockWithPassphraseCore(EncryptionKey entry, string passphrase)
+        {
             if (entry == null)
                 throw new ArgumentNullException(nameof(entry));
             if (String.IsNullOrEmpty(passphrase))
@@ -127,6 +164,24 @@ namespace Armor.Core.Security
         /// <exception cref="ArmorCryptoException">Thrown when the key is not key-file-protected or the key file is wrong.</exception>
         public byte[] UnlockWithKeyFile(EncryptionKey entry, byte[] keyFileBytes)
         {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.KeyOpUnlockKeyFile))
+            {
+                try
+                {
+                    byte[] dataKey = UnlockWithKeyFileCore(entry, keyFileBytes);
+                    operation.Succeed();
+                    return dataKey;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private static byte[] UnlockWithKeyFileCore(EncryptionKey entry, byte[] keyFileBytes)
+        {
             if (entry == null)
                 throw new ArgumentNullException(nameof(entry));
             if (keyFileBytes == null)
@@ -146,6 +201,11 @@ namespace Armor.Core.Security
             {
                 CryptographicOperations.ZeroMemory(kek);
             }
+        }
+
+        private static TelemetryOperation StartOperation(string operation)
+        {
+            return TelemetryOperation.Start(ArmorTelemetry.KeyOperations, ArmorTelemetry.KeyOperationDuration, TelemetryNames.AttrKeyOperation, operation, TelemetryNames.SpanKeyOperation, TelemetryNames.ComponentKey);
         }
 
         private static byte[] BuildAssociatedData(string keyId)

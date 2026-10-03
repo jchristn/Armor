@@ -2,11 +2,13 @@ namespace Armor.Core.Service
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
     using Armor.Core.Scheduling;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// Evaluates schedules and runs the ones that are due. One tick is a pure, injectable operation:
@@ -47,6 +49,48 @@ namespace Armor.Core.Service
             if (keyProvider == null)
                 throw new ArgumentNullException(nameof(keyProvider));
 
+            // Root span of one tick; each backup the tick runs nests under it as backup.run.
+            long start = Stopwatch.GetTimestamp();
+            Activity? activity = ArmorTelemetry.StartActivity(TelemetryNames.SpanSchedulerTick);
+            TickCounts counts = new TickCounts();
+            string outcome = TelemetryNames.OutcomeFailure;
+            string? errorType = null;
+            try
+            {
+                int ran = await TickCoreAsync(keyProvider, nowUtc, token, onError, onCompleted, counts).ConfigureAwait(false);
+                outcome = TelemetryNames.OutcomeSuccess;
+                ArmorTelemetry.SetTag(activity, TelemetryNames.AttrSchedulesRan, ran);
+                ArmorTelemetry.SetTag(activity, "armor.schedules.pending", counts.Pending);
+                ArmorTelemetry.MarkSuccess(activity);
+                return ran;
+            }
+            catch (Exception ex)
+            {
+                outcome = ArmorTelemetry.OutcomeOf(ex);
+                if (outcome == TelemetryNames.OutcomeFailure)
+                {
+                    errorType = ArmorTelemetry.ErrorType(ex);
+                    ArmorTelemetry.RecordError(TelemetryNames.ComponentScheduler, ex);
+                }
+                ArmorTelemetry.MarkException(activity, ex);
+                throw;
+            }
+            finally
+            {
+                if (outcome != TelemetryNames.OutcomeCanceled)
+                    ArmorTelemetry.NoteSchedulerTick(DateTime.UtcNow, counts.Pending);
+                TagList tags = new TagList();
+                tags.Add(TelemetryNames.AttrOutcome, outcome);
+                ArmorTelemetry.Record(ArmorTelemetry.SchedulerTickDuration, Stopwatch.GetElapsedTime(start).TotalSeconds, tags);
+                if (errorType != null)
+                    tags.Add(TelemetryNames.AttrErrorType, errorType);
+                ArmorTelemetry.Add(ArmorTelemetry.SchedulerTicks, 1, tags);
+                ArmorTelemetry.Stop(activity);
+            }
+        }
+
+        private async Task<int> TickCoreAsync(Func<Policy, Task<byte[]?>> keyProvider, DateTime nowUtc, CancellationToken token, Action<Schedule, Exception>? onError, Action<Schedule, Policy, BackupJob>? onCompleted, TickCounts counts)
+        {
             int ran = 0;
             List<Schedule> schedules = await _Context.Database.Schedules.ReadAllAsync(token).ConfigureAwait(false);
             BackupService backupService = new BackupService(_Context);
@@ -55,29 +99,41 @@ namespace Armor.Core.Service
             {
                 token.ThrowIfCancellationRequested();
                 if (!schedule.Enabled)
+                {
+                    RecordDecision(TelemetryNames.DecisionDisabled);
                     continue;
+                }
 
                 if (!schedule.NextRunUtc.HasValue)
                 {
                     schedule.NextRunUtc = _Evaluator.ComputeNextRun(schedule, nowUtc);
                     await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
+                    RecordDecision(TelemetryNames.DecisionInitialized);
                     continue;
                 }
 
                 if (!_Evaluator.IsDue(schedule, nowUtc))
+                {
+                    RecordDecision(TelemetryNames.DecisionNotDue);
                     continue;
+                }
 
                 Policy? policy = await _Context.Database.Policies.ReadAsync(schedule.PolicyId, token).ConfigureAwait(false);
                 if (policy == null || !policy.Enabled)
                 {
                     _Evaluator.MarkRan(schedule, nowUtc);
                     await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
+                    RecordDecision(TelemetryNames.DecisionPolicyDisabled);
                     continue;
                 }
 
                 byte[]? dataKey = await keyProvider(policy).ConfigureAwait(false);
                 if (dataKey == null)
+                {
+                    RecordDecision(TelemetryNames.DecisionKeyUnavailable);
+                    counts.Pending++;
                     continue;
+                }
 
                 BackupJob job;
                 try
@@ -96,6 +152,8 @@ namespace Armor.Core.Service
                     // The backup runs on the next tick after the drive is reconnected. Other schedules whose
                     // targets are reachable — an S3 policy, say — are unaffected.
                     Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': its target is not reachable yet. Will retry.");
+                    RecordDecision(TelemetryNames.DecisionTargetUnreachable);
+                    counts.Pending++;
                     continue;
                 }
                 catch (PolicyAlreadyRunningException)
@@ -103,6 +161,8 @@ namespace Armor.Core.Service
                     // The policy is already backing up (a manual run holds the lock). Leave the schedule due
                     // and retry next tick rather than recording a failure for a run that is proceeding fine.
                     Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': a run is already in progress. Will retry.");
+                    RecordDecision(TelemetryNames.DecisionAlreadyRunning);
+                    counts.Pending++;
                     continue;
                 }
                 catch (Exception ex)
@@ -110,6 +170,8 @@ namespace Armor.Core.Service
                     // One policy's failure (for example an unreachable target) must not abort the tick
                     // or starve the other schedules. Leave this one due so it retries next tick — and
                     // runs the moment the target is reachable again.
+                    RecordDecision(TelemetryNames.DecisionFailed);
+                    counts.Pending++;
                     onError?.Invoke(schedule, ex);
                     continue;
                 }
@@ -117,6 +179,7 @@ namespace Armor.Core.Service
                 _Evaluator.MarkRan(schedule, nowUtc);
                 await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
                 ran += 1;
+                RecordDecision(TelemetryNames.DecisionRan);
 
                 // Surface the completed run to the host (the tray agent raises a desktop notification). Kept
                 // outside the try above so a reporting hiccup cannot be mistaken for a backup failure.
@@ -131,6 +194,13 @@ namespace Armor.Core.Service
             }
 
             return ran;
+        }
+
+        private static void RecordDecision(string decision)
+        {
+            TagList tags = new TagList();
+            tags.Add(TelemetryNames.AttrSchedulerDecision, decision);
+            ArmorTelemetry.Add(ArmorTelemetry.SchedulerDecisions, 1, tags);
         }
     }
 }

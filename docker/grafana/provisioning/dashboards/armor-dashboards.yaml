@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: 'Armor'
+    orgId: 1
+    folder: 'Armor'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards/armor

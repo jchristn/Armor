@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Armor.Core\Armor.Core.csproj" />
+    <ProjectReference Include="..\Armor.Telemetry\Armor.Telemetry.csproj" />
   </ItemGroup>
 
   <ItemGroup>

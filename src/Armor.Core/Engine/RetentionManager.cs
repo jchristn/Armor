@@ -2,6 +2,7 @@ namespace Armor.Core.Engine
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.ChunkStore;
@@ -9,6 +10,7 @@ namespace Armor.Core.Engine
     using Armor.Core.Enums;
     using Armor.Core.Models;
     using Armor.Core.Storage;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// Applies a policy's retention window: it prunes backup points-in-time older than the window, then
@@ -60,6 +62,53 @@ namespace Armor.Core.Engine
             if (dataKey == null)
                 throw new ArgumentNullException(nameof(dataKey));
 
+            long start = Stopwatch.GetTimestamp();
+            Activity? activity = ArmorTelemetry.StartActivity(TelemetryNames.SpanRetentionRun);
+            ArmorTelemetry.SetTag(activity, TelemetryNames.AttrPolicyId, policy.Id);
+            ArmorTelemetry.SetTag(activity, TelemetryNames.AttrStorageTargetId, storageTargetId);
+            ArmorTelemetry.SetTag(activity, "armor.retention.days", policy.RetentionDays);
+            string outcome = TelemetryNames.OutcomeFailure;
+            string? errorType = null;
+            try
+            {
+                RetentionResult completed = await RunCoreAsync(policy, repository, storageTargetId, dataKey, nowUtc, token).ConfigureAwait(false);
+                outcome = TelemetryNames.OutcomeSuccess;
+                ArmorTelemetry.SetTag(activity, "armor.retention.jobs_pruned", completed.JobsPruned);
+                ArmorTelemetry.SetTag(activity, "armor.retention.chunks_deleted", completed.ChunksDeleted);
+                ArmorTelemetry.MarkSuccess(activity);
+                return completed;
+            }
+            catch (Exception ex)
+            {
+                outcome = ArmorTelemetry.OutcomeOf(ex);
+                if (outcome == TelemetryNames.OutcomeFailure)
+                {
+                    errorType = ArmorTelemetry.ErrorType(ex);
+                    ArmorTelemetry.RecordError(TelemetryNames.ComponentRetention, ex);
+                }
+                ArmorTelemetry.MarkException(activity, ex);
+                throw;
+            }
+            finally
+            {
+                TagList tags = new TagList();
+                tags.Add(TelemetryNames.AttrOutcome, outcome);
+                ArmorTelemetry.Record(ArmorTelemetry.RetentionDuration, Stopwatch.GetElapsedTime(start).TotalSeconds, tags);
+                if (errorType != null)
+                    tags.Add(TelemetryNames.AttrErrorType, errorType);
+                ArmorTelemetry.Add(ArmorTelemetry.RetentionRuns, 1, tags);
+                ArmorTelemetry.Stop(activity);
+            }
+        }
+
+        private async Task<RetentionResult> RunCoreAsync(
+            Policy policy,
+            IStorageRepository repository,
+            string storageTargetId,
+            byte[] dataKey,
+            DateTime nowUtc,
+            CancellationToken token)
+        {
             RetentionResult result = new RetentionResult();
             DateTime cutoff = nowUtc.AddDays(-policy.RetentionDays);
 
@@ -73,23 +122,53 @@ namespace Armor.Core.Engine
 
             completed.Sort((left, right) => Nullable.Compare(right.CompletedUtc, left.CompletedUtc));
 
-            for (int i = 0; i < completed.Count; i++)
+            using (TelemetryStage pruneStage = StartStage(TelemetryNames.StagePrune))
             {
-                token.ThrowIfCancellationRequested();
+                try
+                {
+                    for (int i = 0; i < completed.Count; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
 
-                if (i == 0)
-                    continue;
+                        if (i == 0)
+                            continue;
 
-                BackupJob job = completed[i];
-                if (!job.CompletedUtc.HasValue || job.CompletedUtc.Value >= cutoff)
-                    continue;
+                        BackupJob job = completed[i];
+                        if (!job.CompletedUtc.HasValue || job.CompletedUtc.Value >= cutoff)
+                            continue;
 
-                await PruneJobAsync(job, storageTargetId, dataKey, repository, token).ConfigureAwait(false);
-                result.JobsPruned += 1;
+                        await PruneJobAsync(job, storageTargetId, dataKey, repository, token).ConfigureAwait(false);
+                        result.JobsPruned += 1;
+                        ArmorTelemetry.Add(ArmorTelemetry.RetentionJobsPruned, 1, default(TagList));
+                    }
+                    pruneStage.Succeed();
+                }
+                catch (Exception ex)
+                {
+                    pruneStage.Fail(ex);
+                    throw;
+                }
             }
 
-            result.ChunksDeleted = await SweepAsync(storageTargetId, repository, token).ConfigureAwait(false);
+            using (TelemetryStage sweepStage = StartStage(TelemetryNames.StageSweep))
+            {
+                try
+                {
+                    result.ChunksDeleted = await SweepAsync(storageTargetId, repository, token).ConfigureAwait(false);
+                    sweepStage.Succeed();
+                }
+                catch (Exception ex)
+                {
+                    sweepStage.Fail(ex);
+                    throw;
+                }
+            }
             return result;
+        }
+
+        private static TelemetryStage StartStage(string stage)
+        {
+            return TelemetryStage.Start(ArmorTelemetry.RetentionStage, ArmorTelemetry.RetentionStageDuration, stage);
         }
 
         private async Task PruneJobAsync(BackupJob job, string storageTargetId, byte[] dataKey, IStorageRepository repository, CancellationToken token)
@@ -128,6 +207,7 @@ namespace Armor.Core.Engine
                 await repository.DeleteChunkAsync(entry.Hash, token).ConfigureAwait(false);
                 await _Database.ChunkIndex.DeleteAsync(storageTargetId, entry.Hash, token).ConfigureAwait(false);
                 deleted += 1;
+                ArmorTelemetry.Add(ArmorTelemetry.RetentionChunksDeleted, 1, default(TagList));
             }
             return deleted;
         }

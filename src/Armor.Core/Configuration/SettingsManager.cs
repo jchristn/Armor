@@ -178,6 +178,30 @@ namespace Armor.Core.Configuration
             int chunkMax;
             if (TryGetInt("ARMOR_CHUNK_MAX_BYTES", out chunkMax))
                 settings.Chunking.MaxSizeBytes = chunkMax;
+
+            bool telemetryEnabled;
+            if (TryGetBool("ARMOR_TELEMETRY_ENABLED", out telemetryEnabled))
+                settings.Telemetry.Enabled = telemetryEnabled;
+
+            string? otlpEndpoint = _EnvironmentReader("ARMOR_TELEMETRY_OTLP_ENDPOINT");
+            if (!String.IsNullOrWhiteSpace(otlpEndpoint))
+                settings.Telemetry.OtlpEndpoint = otlpEndpoint;
+
+            string? otlpProtocol = _EnvironmentReader("ARMOR_TELEMETRY_OTLP_PROTOCOL");
+            if (!String.IsNullOrWhiteSpace(otlpProtocol))
+                settings.Telemetry.OtlpProtocol = otlpProtocol;
+
+            bool prometheusEnabled;
+            if (TryGetBool("ARMOR_TELEMETRY_PROMETHEUS_ENABLED", out prometheusEnabled))
+                settings.Telemetry.PrometheusEnabled = prometheusEnabled;
+
+            bool lokiEnabled;
+            if (TryGetBool("ARMOR_TELEMETRY_LOKI_ENABLED", out lokiEnabled))
+                settings.Telemetry.LokiEnabled = lokiEnabled;
+
+            bool traceChunks;
+            if (TryGetBool("ARMOR_TELEMETRY_TRACE_CHUNKS", out traceChunks))
+                settings.Telemetry.TraceChunkOperations = traceChunks;
         }
 
         private void ApplyDefaults(ArmorSettings settings)

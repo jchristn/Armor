@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <Description>Armor telemetry host: the composition-root exporter (Radiant) that the agent and the TUI start to ship the Armor meter, activity source, runtime metrics, and logs to an OpenTelemetry collector, Prometheus, or Loki.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Armor.Core\Armor.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Radiant" Version="0.1.2" />
+  </ItemGroup>
+
+</Project>

@@ -30,7 +30,8 @@ namespace Test.Shared
                     RetentionSuite.Build(),
                     SelfBackupSuite.Build(),
                     ServiceSuite.Build(),
-                    CoverageSuite.Build()
+                    CoverageSuite.Build(),
+                    TelemetrySuite.Build()
                 };
             }
         }

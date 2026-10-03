@@ -184,6 +184,26 @@ Two independent paths bring Armor back:
   the password**, the data is recoverable even if the local database is gone — the TUI's
   **Recover** section browses the catalog on the target and restores full or partial.
 
+## Monitoring with Grafana
+
+Armor is observable out of the box. The engine emits metrics and traces through the standard .NET
+`Meter` and `ActivitySource` named `Armor`: per-stage backup timing (scan, read, hash, compress and
+encrypt, upload, manifest, retention), every call to every storage target, restores, verification,
+retention, the scheduler's decisions, and errors by type. Turn on export and the agent and the TUI ship
+them, plus .NET runtime metrics and trace-correlated logs, to any OpenTelemetry collector.
+
+A ready-made stack (OpenTelemetry Collector, Prometheus, Tempo, Loki, and Grafana with six provisioned
+dashboards and recommended alerts) comes up with one command:
+
+```
+docker compose -f docker/compose.yaml up -d
+```
+
+Then set `"Telemetry": { "Enabled": true }` in `~/.armor/armor.json` (or `ARMOR_TELEMETRY_ENABLED=true`),
+restart the agent and the TUI, and open Grafana at `http://localhost:3000` (`admin` / `admin` locally).
+Export is off by default, so a desktop install opens no ports and makes no connections until you ask it
+to. See [`TELEMETRY.md`](TELEMETRY.md) for every metric, span, setting, dashboard, and alert.
+
 ## Building
 
 Armor targets .NET 8 and .NET 10.

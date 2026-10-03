@@ -1,0 +1,77 @@
+# Recommended Armor alerts. Thresholds assume daily backups; tune them to your schedules. Each alert maps
+# to a dashboard in the Armor Grafana folder (see TELEMETRY.md, "Recommended alerts").
+
+groups:
+  - name: armor
+    rules:
+      - alert: ArmorBackupFailed
+        expr: sum by (job, armor_backup_type, error_type) (increase(armor_backup_jobs_total{armor_outcome="failure"}[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 'An Armor backup failed ({{ $labels.error_type }})'
+          description: 'Open Armor / Backups and the failed backup.job trace in Tempo for the failing stage.'
+
+      - alert: ArmorNoRecentBackup
+        expr: time() - max by (job) (armor_backup_last_success_timestamp_seconds) > 26 * 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'No successful Armor backup in over 26 hours'
+          description: 'Check Armor / Scheduler for left-due schedules (key unavailable, target unreachable, failed).'
+
+      - alert: ArmorSchedulesLeftDue
+        expr: max by (job) (armor_scheduler_schedules_pending) > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Armor schedules are due but not running'
+          description: 'See armor_scheduler_decisions_total by decision on Armor / Scheduler.'
+
+      - alert: ArmorSchedulerStalled
+        expr: time() - max by (job) (armor_scheduler_last_tick_timestamp_seconds{job="armor-agent"}) > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'The Armor agent scheduler has not ticked in 10 minutes'
+
+      - alert: ArmorAgentDown
+        expr: absent_over_time(armor_build_info{job="armor-agent"}[15m])
+        labels:
+          severity: critical
+        annotations:
+          summary: 'No telemetry from the Armor agent for 15 minutes'
+
+      - alert: ArmorStorageErrors
+        expr: sum by (job, armor_storage_type, armor_storage_operation, error_type) (rate(armor_storage_operations_total{armor_outcome="failure"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Armor storage calls failing on {{ $labels.armor_storage_type }} ({{ $labels.armor_storage_operation }})'
+
+      - alert: ArmorStorageSlow
+        expr: histogram_quantile(0.95, sum by (le, armor_storage_type, armor_storage_operation) (rate(armor_storage_operation_duration_seconds_bucket[10m]))) > 5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Armor {{ $labels.armor_storage_type }} {{ $labels.armor_storage_operation }} p95 above 5s'
+
+      - alert: ArmorVerificationFoundDamage
+        expr: sum by (job, armor_chunk_outcome) (increase(armor_verify_chunks_total{armor_chunk_outcome=~"missing|corrupt"}[1h])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Armor verification found {{ $labels.armor_chunk_outcome }} chunks'
+
+      - alert: ArmorSourceFilesSkipped
+        expr: sum by (job) (increase(armor_backup_files_total{armor_file_outcome="skipped"}[6h])) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: 'Armor skipped unreadable source files'
+          description: 'The paths are in the agent log (Loki, {service_name="armor-agent"} |= "Skipping unreadable").'

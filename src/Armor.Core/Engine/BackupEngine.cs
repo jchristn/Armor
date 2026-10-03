@@ -3,6 +3,7 @@ namespace Armor.Core.Engine
     using System;
     using System.Collections.Concurrent;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Text;
     using System.Threading;
@@ -16,6 +17,7 @@ namespace Armor.Core.Engine
     using Armor.Core.Models;
     using Armor.Core.Serialization;
     using Armor.Core.Storage;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// Executes a backup run for a policy: it enumerates included files, decides which need
@@ -91,59 +93,165 @@ namespace Armor.Core.Engine
                 throw new ArgumentNullException(nameof(chunking));
 
             BackupTypeEnum backupType = backupTypeOverride ?? policy.BackupType;
+            string typeLabel = ArmorTelemetry.BackupTypeLabel(backupType);
+            long jobStart = Stopwatch.GetTimestamp();
 
+            // One span per engine job; every stage below opens a stage:<name> child under it, and the
+            // scan task and copy workers inherit it through the execution context.
+            Activity? jobActivity = ArmorTelemetry.StartActivity(TelemetryNames.SpanBackupJob);
+            ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrPolicyId, policy.Id);
+            ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrBackupType, typeLabel);
+            ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrStorageTargetId, storageTargetId);
+            TagList activeTags = new TagList();
+            activeTags.Add(TelemetryNames.AttrBackupType, typeLabel);
+            ArmorTelemetry.Add(ArmorTelemetry.BackupJobsActive, 1, activeTags);
+            string jobOutcome = TelemetryNames.OutcomeFailure;
+            string? jobErrorType = null;
+            try
+            {
+                BackupJob completed = await RunJobAsync(policy, repository, storageTargetId, encryptionKey, dataKey, chunking, backupType, jobActivity, token, progress, maxParallelism).ConfigureAwait(false);
+                jobOutcome = TelemetryNames.OutcomeSuccess;
+                ArmorTelemetry.NoteBackupSucceeded(completed.CompletedUtc ?? DateTime.UtcNow);
+                ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrFileCount, completed.FileCount);
+                ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrByteCount, completed.BytesTotal);
+                ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrChunksWritten, completed.ChunksWritten);
+                ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrChunksReused, completed.ChunksReused);
+                ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrFilesSkipped, completed.SkippedFiles);
+                ArmorTelemetry.MarkSuccess(jobActivity);
+                return completed;
+            }
+            catch (Exception ex)
+            {
+                jobOutcome = ArmorTelemetry.OutcomeOf(ex);
+                if (jobOutcome == TelemetryNames.OutcomeFailure)
+                {
+                    jobErrorType = ArmorTelemetry.ErrorType(ex);
+                    ArmorTelemetry.RecordError(TelemetryNames.ComponentBackup, ex);
+                }
+                ArmorTelemetry.MarkException(jobActivity, ex);
+                throw;
+            }
+            finally
+            {
+                ArmorTelemetry.Add(ArmorTelemetry.BackupJobsActive, -1, activeTags);
+                TagList jobTags = new TagList();
+                jobTags.Add(TelemetryNames.AttrBackupType, typeLabel);
+                jobTags.Add(TelemetryNames.AttrOutcome, jobOutcome);
+                ArmorTelemetry.Record(ArmorTelemetry.BackupDuration, Stopwatch.GetElapsedTime(jobStart).TotalSeconds, jobTags);
+                if (jobErrorType != null)
+                    jobTags.Add(TelemetryNames.AttrErrorType, jobErrorType);
+                ArmorTelemetry.Add(ArmorTelemetry.BackupJobs, 1, jobTags);
+                ArmorTelemetry.Stop(jobActivity);
+            }
+        }
+
+        private async Task<BackupJob> RunJobAsync(
+            Policy policy,
+            IStorageRepository repository,
+            string storageTargetId,
+            EncryptionKey encryptionKey,
+            byte[] dataKey,
+            ChunkingSettings chunking,
+            BackupTypeEnum backupType,
+            Activity? jobActivity,
+            CancellationToken token,
+            IProgress<BackupProgress>? progress,
+            int maxParallelism)
+        {
             // Resume a prior run for this policy that crashed or failed with work still pending. The run
             // lock held by the caller means no other live process owns this policy, so a Running job found
             // here belongs to a dead run. A resumed run keeps the same job id and baseline and skips the
             // files it already finished.
-            BackupJob? resumable = await FindResumableJobAsync(policy.Id, backupType, token).ConfigureAwait(false);
-
             BackupJob job;
             bool resuming;
-            if (resumable != null)
+            using (TelemetryStage openStage = StartStage(TelemetryNames.StageOpen))
             {
-                job = resumable;
-                job.Status = JobStatusEnum.Running;
-                job.Error = null;
+                try
+                {
+                    BackupJob? resumable = await FindResumableJobAsync(policy.Id, backupType, token).ConfigureAwait(false);
+                    if (resumable != null)
+                    {
+                        job = resumable;
+                        job.Status = JobStatusEnum.Running;
+                        job.Error = null;
 
-                // A resumable run whose scan finished has a complete, trustworthy work list — process only.
-                // One that died mid-scan has a partial list that would silently drop unscanned files, so
-                // discard it and re-scan from scratch under the same job id and baseline. Chunks already
-                // written are content-addressed and dedupe on the rewrite, so the only cost is re-hashing the
-                // files that were processed before the crash.
-                if (job.ScanComplete)
-                {
-                    resuming = true;
+                        // A resumable run whose scan finished has a complete, trustworthy work list — process only.
+                        // One that died mid-scan has a partial list that would silently drop unscanned files, so
+                        // discard it and re-scan from scratch under the same job id and baseline. Chunks already
+                        // written are content-addressed and dedupe on the rewrite, so the only cost is re-hashing the
+                        // files that were processed before the crash.
+                        if (job.ScanComplete)
+                        {
+                            resuming = true;
+                        }
+                        else
+                        {
+                            await _Database.JobFiles.DeleteByJobAsync(job.Id, token).ConfigureAwait(false);
+                            resuming = false;
+                        }
+                        await _Database.BackupJobs.UpdateAsync(job, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        job = new BackupJob();
+                        job.PolicyId = policy.Id;
+                        job.BackupType = backupType;
+                        job.Status = JobStatusEnum.Running;
+                        job.StartedUtc = DateTime.UtcNow;
+                        job.ScanComplete = false;
+                        BackupJob? freshBaseline = await ResolveBaselineAsync(policy.Id, backupType, token).ConfigureAwait(false);
+                        job.BaseJobId = freshBaseline?.Id;
+                        await _Database.BackupJobs.CreateAsync(job, token).ConfigureAwait(false);
+                        resuming = false;
+                    }
+                    openStage.Succeed();
                 }
-                else
+                catch (Exception ex)
                 {
-                    await _Database.JobFiles.DeleteByJobAsync(job.Id, token).ConfigureAwait(false);
-                    resuming = false;
+                    openStage.Fail(ex);
+                    throw;
                 }
-                await _Database.BackupJobs.UpdateAsync(job, token).ConfigureAwait(false);
             }
-            else
-            {
-                job = new BackupJob();
-                job.PolicyId = policy.Id;
-                job.BackupType = backupType;
-                job.Status = JobStatusEnum.Running;
-                job.StartedUtc = DateTime.UtcNow;
-                job.ScanComplete = false;
-                BackupJob? freshBaseline = await ResolveBaselineAsync(policy.Id, backupType, token).ConfigureAwait(false);
-                job.BaseJobId = freshBaseline?.Id;
-                await _Database.BackupJobs.CreateAsync(job, token).ConfigureAwait(false);
-                resuming = false;
-            }
+
+            ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrJobId, job.Id);
+            ArmorTelemetry.SetTag(jobActivity, TelemetryNames.AttrResumed, resuming);
+            if (jobActivity?.Parent != null && jobActivity.Parent.OperationName == TelemetryNames.SpanBackupRun)
+                ArmorTelemetry.SetTag(jobActivity.Parent, TelemetryNames.AttrJobId, job.Id);
 
             try
             {
-                await WriteHeaderAsync(repository, encryptionKey, chunking, token).ConfigureAwait(false);
+                using (TelemetryStage headerStage = StartStage(TelemetryNames.StageHeader))
+                {
+                    try
+                    {
+                        await WriteHeaderAsync(repository, encryptionKey, chunking, token).ConfigureAwait(false);
+                        headerStage.Succeed();
+                    }
+                    catch (Exception ex)
+                    {
+                        headerStage.Fail(ex);
+                        throw;
+                    }
+                }
 
-                BackupJob? baselineJob = String.IsNullOrEmpty(job.BaseJobId)
-                    ? null
-                    : await _Database.BackupJobs.ReadAsync(job.BaseJobId!, token).ConfigureAwait(false);
-                Dictionary<string, ManifestFileEntry> baseline = await LoadBaselineEntriesAsync(repository, baselineJob, dataKey, token).ConfigureAwait(false);
+                Dictionary<string, ManifestFileEntry> baseline;
+                using (TelemetryStage baselineStage = StartStage(TelemetryNames.StageBaseline))
+                {
+                    try
+                    {
+                        BackupJob? baselineJob = String.IsNullOrEmpty(job.BaseJobId)
+                            ? null
+                            : await _Database.BackupJobs.ReadAsync(job.BaseJobId!, token).ConfigureAwait(false);
+                        baseline = await LoadBaselineEntriesAsync(repository, baselineJob, dataKey, token).ConfigureAwait(false);
+                        ArmorTelemetry.SetTag(baselineStage.Activity, TelemetryNames.AttrFileCount, baseline.Count);
+                        baselineStage.Succeed();
+                    }
+                    catch (Exception ex)
+                    {
+                        baselineStage.Fail(ex);
+                        throw;
+                    }
+                }
 
                 // Phases 1 and 2 run concurrently. The scanner streams the source into the work list in
                 // batches while a pool of workers drains the list and backs the files up, so processing starts
@@ -159,7 +267,7 @@ namespace Armor.Core.Engine
                 {
                     scan.SetTotals(totals.FileCount, totals.TotalBytes);
                     scan.MarkComplete();
-                    skippedFiles = await ProcessPendingFilesAsync(
+                    skippedFiles = await ProcessPendingFilesStagedAsync(
                         job, policy, repository, storageTargetId, dataKey, chunking, baseline, backupType, totals, scan, maxParallelism, progress, token).ConfigureAwait(false);
                 }
                 else
@@ -179,7 +287,7 @@ namespace Armor.Core.Engine
                         {
                             try
                             {
-                                await ScanIntoWorkListAsync(job, policy, matcher, scan, progress, scanFailure.Token).ConfigureAwait(false);
+                                await ScanIntoWorkListStagedAsync(job, policy, matcher, scan, progress, scanFailure.Token).ConfigureAwait(false);
                             }
                             catch (OperationCanceledException)
                             {
@@ -201,7 +309,7 @@ namespace Armor.Core.Engine
 
                         try
                         {
-                            skippedFiles = await ProcessPendingFilesAsync(
+                            skippedFiles = await ProcessPendingFilesStagedAsync(
                                 job, policy, repository, storageTargetId, dataKey, chunking, baseline, backupType, totals, scan, maxParallelism, progress, scanFailure.Token).ConfigureAwait(false);
                         }
                         catch (Exception) when (scanError != null)
@@ -233,63 +341,93 @@ namespace Armor.Core.Engine
                 // into entries and handed to the writer, which flushes a bounded segment at a time. This keeps
                 // a multi-million-file manifest off the heap and away from the ~2 GB single-object ceiling that
                 // a one-shot serialize-and-encrypt would hit.
+                TelemetryStage manifestStage = StartStage(TelemetryNames.StageManifest);
                 DateTime pointInTime = job.StartedUtc ?? DateTime.UtcNow;
                 string manifestKey = RepositoryKeys.ManifestKey(policy.Id, job.Id);
-                ManifestHeader manifestHeader = new ManifestHeader
+                ManifestStore.Writer manifestWriter;
+                try
                 {
-                    JobId = job.Id,
-                    PolicyId = policy.Id,
-                    BackupType = backupType,
-                    BaseJobId = job.BaseJobId,
-                    PointInTimeUtc = pointInTime,
-                };
-                ManifestStore.Writer manifestWriter = new ManifestStore.Writer(repository, manifestKey, dataKey, manifestHeader);
-
-                long afterRowid = 0;
-                while (true)
-                {
-                    token.ThrowIfCancellationRequested();
-                    List<JobFileEntry> donePage = await _Database.JobFiles.ReadDonePageAsync(job.Id, afterRowid, ProcessPageSize, token).ConfigureAwait(false);
-                    if (donePage.Count == 0)
-                        break;
-                    foreach (JobFileEntry done in donePage)
+                    ManifestHeader manifestHeader = new ManifestHeader
                     {
-                        ManifestFileEntry entry = new ManifestFileEntry();
-                        entry.Path = done.Path;
-                        entry.SizeBytes = done.SizeBytes;
-                        entry.ModifiedUtc = done.ModifiedUtc;
-                        entry.ArchiveBit = done.ArchiveBit;
-                        entry.ChunkHashes = new List<string>(done.ChunkHashes);
-                        await manifestWriter.AddAsync(entry, token).ConfigureAwait(false);
-                        afterRowid = done.Rowid;
+                        JobId = job.Id,
+                        PolicyId = policy.Id,
+                        BackupType = backupType,
+                        BaseJobId = job.BaseJobId,
+                        PointInTimeUtc = pointInTime,
+                    };
+                    manifestWriter = new ManifestStore.Writer(repository, manifestKey, dataKey, manifestHeader);
+
+                    long afterRowid = 0;
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        List<JobFileEntry> donePage = await _Database.JobFiles.ReadDonePageAsync(job.Id, afterRowid, ProcessPageSize, token).ConfigureAwait(false);
+                        if (donePage.Count == 0)
+                            break;
+                        foreach (JobFileEntry done in donePage)
+                        {
+                            ManifestFileEntry entry = new ManifestFileEntry();
+                            entry.Path = done.Path;
+                            entry.SizeBytes = done.SizeBytes;
+                            entry.ModifiedUtc = done.ModifiedUtc;
+                            entry.ArchiveBit = done.ArchiveBit;
+                            entry.ChunkHashes = new List<string>(done.ChunkHashes);
+                            await manifestWriter.AddAsync(entry, token).ConfigureAwait(false);
+                            afterRowid = done.Rowid;
+                        }
                     }
+
+                    await manifestWriter.CompleteAsync(token).ConfigureAwait(false);
+                    ArmorTelemetry.SetTag(manifestStage.Activity, TelemetryNames.AttrFileCount, manifestWriter.FileCount);
+                    manifestStage.Succeed();
+                }
+                catch (Exception ex)
+                {
+                    manifestStage.Fail(ex);
+                    throw;
+                }
+                finally
+                {
+                    manifestStage.Dispose();
                 }
 
-                await manifestWriter.CompleteAsync(token).ConfigureAwait(false);
+                TelemetryStage finalizeStage = StartStage(TelemetryNames.StageFinalize);
+                try
+                {
+                    job.FileCount = manifestWriter.FileCount;
+                    job.BytesTotal = manifestWriter.TotalBytes;
 
-                job.FileCount = manifestWriter.FileCount;
-                job.BytesTotal = manifestWriter.TotalBytes;
+                    // Write a small encrypted metadata sidecar so the catalog can be listed and described
+                    // during recovery without decoding the full manifest.
+                    BackupRunInfo runInfo = new BackupRunInfo();
+                    runInfo.JobId = job.Id;
+                    runInfo.PolicyId = policy.Id;
+                    runInfo.PolicyName = policy.Name;
+                    runInfo.BackupType = backupType;
+                    runInfo.PointInTimeUtc = pointInTime;
+                    runInfo.FileCount = job.FileCount;
+                    runInfo.TotalBytes = job.BytesTotal;
+                    runInfo.BytesWritten = job.BytesWritten;
+                    runInfo.ChunksWritten = job.ChunksWritten;
+                    await repository.WriteObjectAsync(RepositoryKeys.InfoKey(policy.Id, job.Id), RunInfoCodec.Encode(runInfo, dataKey), token).ConfigureAwait(false);
 
-                // Write a small encrypted metadata sidecar so the catalog can be listed and described
-                // during recovery without decoding the full manifest.
-                BackupRunInfo runInfo = new BackupRunInfo();
-                runInfo.JobId = job.Id;
-                runInfo.PolicyId = policy.Id;
-                runInfo.PolicyName = policy.Name;
-                runInfo.BackupType = backupType;
-                runInfo.PointInTimeUtc = pointInTime;
-                runInfo.FileCount = job.FileCount;
-                runInfo.TotalBytes = job.BytesTotal;
-                runInfo.BytesWritten = job.BytesWritten;
-                runInfo.ChunksWritten = job.ChunksWritten;
-                await repository.WriteObjectAsync(RepositoryKeys.InfoKey(policy.Id, job.Id), RunInfoCodec.Encode(runInfo, dataKey), token).ConfigureAwait(false);
+                    job.ManifestKey = manifestKey;
+                    job.Status = JobStatusEnum.Completed;
+                    job.CompletedUtc = DateTime.UtcNow;
+                    await _Database.BackupJobs.UpdateAsync(job, token).ConfigureAwait(false);
 
-                job.ManifestKey = manifestKey;
-                job.Status = JobStatusEnum.Completed;
-                job.CompletedUtc = DateTime.UtcNow;
-                await _Database.BackupJobs.UpdateAsync(job, token).ConfigureAwait(false);
-
-                await _Database.JobFiles.DeleteByJobAsync(job.Id, CancellationToken.None).ConfigureAwait(false);
+                    await _Database.JobFiles.DeleteByJobAsync(job.Id, CancellationToken.None).ConfigureAwait(false);
+                    finalizeStage.Succeed();
+                }
+                catch (Exception ex)
+                {
+                    finalizeStage.Fail(ex);
+                    throw;
+                }
+                finally
+                {
+                    finalizeStage.Dispose();
+                }
                 return job;
             }
             catch (OperationCanceledException)
@@ -343,6 +481,64 @@ namespace Armor.Core.Engine
             return best;
         }
 
+        private async Task ScanIntoWorkListStagedAsync(BackupJob job, Policy policy, ExcludeMatcher matcher, ScanCoordinator scan, IProgress<BackupProgress>? progress, CancellationToken token)
+        {
+            using (TelemetryStage stage = StartStage(TelemetryNames.StageScan))
+            {
+                try
+                {
+                    await ScanIntoWorkListAsync(job, policy, matcher, scan, progress, token).ConfigureAwait(false);
+                    ArmorTelemetry.SetTag(stage.Activity, TelemetryNames.AttrFileCount, scan.Files);
+                    ArmorTelemetry.SetTag(stage.Activity, TelemetryNames.AttrByteCount, scan.Bytes);
+                    stage.Succeed();
+                }
+                catch (Exception ex)
+                {
+                    stage.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private async Task<long> ProcessPendingFilesStagedAsync(
+            BackupJob job,
+            Policy policy,
+            IStorageRepository repository,
+            string storageTargetId,
+            byte[] dataKey,
+            ChunkingSettings chunking,
+            Dictionary<string, ManifestFileEntry> baseline,
+            BackupTypeEnum backupType,
+            JobFileTotals totals,
+            ScanCoordinator scan,
+            int maxParallelism,
+            IProgress<BackupProgress>? progress,
+            CancellationToken token)
+        {
+            using (TelemetryStage stage = StartStage(TelemetryNames.StageProcess))
+            {
+                try
+                {
+                    long skipped = await ProcessPendingFilesAsync(
+                        job, policy, repository, storageTargetId, dataKey, chunking, baseline, backupType, totals, scan, maxParallelism, progress, token).ConfigureAwait(false);
+                    ArmorTelemetry.SetTag(stage.Activity, TelemetryNames.AttrWorkers, Math.Clamp(maxParallelism, 1, 32));
+                    ArmorTelemetry.SetTag(stage.Activity, TelemetryNames.AttrFilesSkipped, skipped);
+                    stage.Succeed();
+                    return skipped;
+                }
+                catch (Exception ex)
+                {
+                    stage.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private static TelemetryStage StartStage(string stage)
+        {
+            return TelemetryStage.Start(ArmorTelemetry.BackupStage, ArmorTelemetry.BackupStageDuration, stage);
+        }
+
         /// <summary>
         /// Scan the source and stream the work list into the database in batches, updating the coordinator's
         /// running totals as it goes and marking the scan complete (durably) at the end. Runs concurrently
@@ -373,6 +569,7 @@ namespace Armor.Core.Engine
                 {
                     await _Database.JobFiles.AddPendingAsync(job.Id, batch, token).ConfigureAwait(false);
                     scan.Add(batch.Count, batchBytes);
+                    RecordScanned(batch.Count, batchBytes);
                     batch.Clear();
                     batchBytes = 0;
                     progress?.Report(new BackupProgress { Scanning = true, FilesTotal = (int)scan.Files, BytesTotal = scan.Bytes, FilesDone = 0, BytesDone = 0 });
@@ -383,6 +580,7 @@ namespace Armor.Core.Engine
             {
                 await _Database.JobFiles.AddPendingAsync(job.Id, batch, token).ConfigureAwait(false);
                 scan.Add(batch.Count, batchBytes);
+                RecordScanned(batch.Count, batchBytes);
             }
 
             // Record durably that the work list is complete before releasing the producer, so a crash after
@@ -390,6 +588,14 @@ namespace Armor.Core.Engine
             job.ScanComplete = true;
             await _Database.BackupJobs.SetScanCompleteAsync(job.Id, true, token).ConfigureAwait(false);
             scan.MarkComplete();
+        }
+
+        private static void RecordScanned(long files, long bytes)
+        {
+            ArmorTelemetry.Add(ArmorTelemetry.BackupFilesScanned, files, default(TagList));
+            TagList tags = new TagList();
+            tags.Add(TelemetryNames.AttrBytesKind, TelemetryNames.BytesScanned);
+            ArmorTelemetry.Add(ArmorTelemetry.BackupBytes, bytes, tags);
         }
 
         /// <summary>
@@ -441,158 +647,185 @@ namespace Armor.Core.Engine
                 BytesDone = totals.DoneBytes,
             };
 
-            Channel<JobFileEntry> channel = Channel.CreateBounded<JobFileEntry>(
-                new BoundedChannelOptions(Math.Max(16, workers * 4))
+            int queueCapacity = Math.Max(16, workers * 4);
+            Channel<QueuedFile> channel = Channel.CreateBounded<QueuedFile>(
+                new BoundedChannelOptions(queueCapacity)
                 {
                     SingleReader = false,
                     SingleWriter = true,
                     FullMode = BoundedChannelFullMode.Wait,
                 });
 
-            using (CancellationTokenSource failure = CancellationTokenSource.CreateLinkedTokenSource(token))
+            ArmorTelemetry.Add(ArmorTelemetry.BackupWorkersCapacity, workers, default(TagList));
+            ArmorTelemetry.Add(ArmorTelemetry.BackupQueueCapacity, queueCapacity, default(TagList));
+            try
             {
-                // Producer: stream the pending work list to the workers, paging by rowid so the same file is
-                // never handed out twice even as workers mark earlier files done. Because the scanner may still
-                // be appending rows, an empty page does not mean "done": only when the page is empty *and* the
-                // scan has finished is the work list truly exhausted. Otherwise the producer waits briefly for
-                // the scanner to add more. New rows always get a higher rowid than the cursor, so nothing is
-                // missed or handed out twice.
-                Task producer = Task.Run(async () =>
+                using (CancellationTokenSource failure = CancellationTokenSource.CreateLinkedTokenSource(token))
                 {
-                    try
+                    // Producer: stream the pending work list to the workers, paging by rowid so the same file is
+                    // never handed out twice even as workers mark earlier files done. Because the scanner may still
+                    // be appending rows, an empty page does not mean "done": only when the page is empty *and* the
+                    // scan has finished is the work list truly exhausted. Otherwise the producer waits briefly for
+                    // the scanner to add more. New rows always get a higher rowid than the cursor, so nothing is
+                    // missed or handed out twice.
+                    Task producer = Task.Run(async () =>
                     {
-                        long afterRowid = 0;
-                        while (true)
+                        try
                         {
-                            List<JobFileEntry> page = await _Database.JobFiles.ReadPendingPageAsync(job.Id, afterRowid, ProcessPageSize, failure.Token).ConfigureAwait(false);
-                            if (page.Count == 0)
+                            long afterRowid = 0;
+                            while (true)
                             {
-                                if (scan.Complete)
-                                    break;
-                                await Task.Delay(ScanPollMilliseconds, failure.Token).ConfigureAwait(false);
-                                continue;
-                            }
-                            foreach (JobFileEntry pending in page)
-                            {
-                                afterRowid = pending.Rowid;
-                                await channel.Writer.WriteAsync(pending, failure.Token).ConfigureAwait(false);
+                                List<JobFileEntry> page = await _Database.JobFiles.ReadPendingPageAsync(job.Id, afterRowid, ProcessPageSize, failure.Token).ConfigureAwait(false);
+                                if (page.Count == 0)
+                                {
+                                    if (scan.Complete)
+                                        break;
+                                    await Task.Delay(ScanPollMilliseconds, failure.Token).ConfigureAwait(false);
+                                    continue;
+                                }
+                                foreach (JobFileEntry pending in page)
+                                {
+                                    afterRowid = pending.Rowid;
+                                    await channel.Writer.WriteAsync(new QueuedFile(pending, Stopwatch.GetTimestamp()), failure.Token).ConfigureAwait(false);
+                                    ArmorTelemetry.Add(ArmorTelemetry.BackupQueueDepth, 1, default(TagList));
+                                }
                             }
                         }
+                        finally
+                        {
+                            channel.Writer.TryComplete();
+                        }
+                    }, failure.Token);
+
+                    // Periodically flush the live counters to the job row so another process (the TUI's
+                    // in-progress view) can watch a run that this process is driving silently — the per-file
+                    // progress observer is in-process only. Best-effort: a persistence hiccup never fails the run,
+                    // and the authoritative totals are written when the run completes.
+                    Task persister = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            while (true)
+                            {
+                                await Task.Delay(ProgressPersistMilliseconds, failure.Token).ConfigureAwait(false);
+                                await _Database.BackupJobs.UpdateProgressAsync(
+                                    job.Id,
+                                    !scan.Complete,
+                                    Interlocked.Read(ref state.FilesDone),
+                                    scan.Files,
+                                    Interlocked.Read(ref state.BytesDone),
+                                    scan.Bytes,
+                                    failure.Token).ConfigureAwait(false);
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // The run finished or was canceled; stop persisting.
+                        }
+                        catch (Exception)
+                        {
+                            // Progress persistence is a courtesy; never let it fault the run.
+                        }
+                    }, failure.Token);
+
+                    Task[] workerTasks = new Task[workers];
+                    for (int i = 0; i < workers; i++)
+                    {
+                        workerTasks[i] = Task.Run(async () =>
+                        {
+                            await foreach (QueuedFile queued in channel.Reader.ReadAllAsync(failure.Token).ConfigureAwait(false))
+                            {
+                                ArmorTelemetry.Add(ArmorTelemetry.BackupQueueDepth, -1, default(TagList));
+                                ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, queued.EnqueuedTimestamp, TelemetryNames.FileStageQueued);
+                                ArmorTelemetry.Add(ArmorTelemetry.BackupWorkersActive, 1, default(TagList));
+                                try
+                                {
+                                    await ProcessOneFileAsync(queued.Entry, state, failure.Token).ConfigureAwait(false);
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    throw;
+                                }
+                                catch
+                                {
+                                    // A target-side or database failure (as opposed to a per-file source read
+                                    // failure, which ProcessOneFileAsync handles) aborts the whole run: cancel the
+                                    // siblings and let the exception surface.
+                                    failure.Cancel();
+                                    throw;
+                                }
+                                finally
+                                {
+                                    ArmorTelemetry.Add(ArmorTelemetry.BackupWorkersActive, -1, default(TagList));
+                                }
+                            }
+                        }, failure.Token);
+                    }
+
+                    try
+                    {
+                        await Task.WhenAll(workerTasks).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Structured outcome handling below decides cancel-versus-fail.
                     }
                     finally
                     {
+                        failure.Cancel();
                         channel.Writer.TryComplete();
                     }
-                }, failure.Token);
 
-                // Periodically flush the live counters to the job row so another process (the TUI's
-                // in-progress view) can watch a run that this process is driving silently — the per-file
-                // progress observer is in-process only. Best-effort: a persistence hiccup never fails the run,
-                // and the authoritative totals are written when the run completes.
-                Task persister = Task.Run(async () =>
-                {
                     try
                     {
-                        while (true)
-                        {
-                            await Task.Delay(ProgressPersistMilliseconds, failure.Token).ConfigureAwait(false);
-                            await _Database.BackupJobs.UpdateProgressAsync(
-                                job.Id,
-                                !scan.Complete,
-                                Interlocked.Read(ref state.FilesDone),
-                                scan.Files,
-                                Interlocked.Read(ref state.BytesDone),
-                                scan.Bytes,
-                                failure.Token).ConfigureAwait(false);
-                        }
+                        await producer.ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException)
+                    catch
                     {
-                        // The run finished or was canceled; stop persisting.
+                        // Producer faults are surfaced through IsFaulted below.
                     }
-                    catch (Exception)
+
+                    try
                     {
-                        // Progress persistence is a courtesy; never let it fault the run.
+                        await persister.ConfigureAwait(false);
                     }
-                }, failure.Token);
-
-                Task[] workerTasks = new Task[workers];
-                for (int i = 0; i < workers; i++)
-                {
-                    workerTasks[i] = Task.Run(async () =>
+                    catch
                     {
-                        await foreach (JobFileEntry pending in channel.Reader.ReadAllAsync(failure.Token).ConfigureAwait(false))
-                        {
-                            try
-                            {
-                                await ProcessOneFileAsync(pending, state, failure.Token).ConfigureAwait(false);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                throw;
-                            }
-                            catch
-                            {
-                                // A target-side or database failure (as opposed to a per-file source read
-                                // failure, which ProcessOneFileAsync handles) aborts the whole run: cancel the
-                                // siblings and let the exception surface.
-                                failure.Cancel();
-                                throw;
-                            }
-                        }
-                    }, failure.Token);
-                }
+                        // The persister swallows its own errors; this observes the task so it is never unobserved.
+                    }
 
-                try
-                {
-                    await Task.WhenAll(workerTasks).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Structured outcome handling below decides cancel-versus-fail.
-                }
-                finally
-                {
-                    failure.Cancel();
-                    channel.Writer.TryComplete();
-                }
+                    // If the user canceled, that outranks any incidental cancellation the workers observed.
+                    token.ThrowIfCancellationRequested();
 
-                try
-                {
-                    await producer.ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Producer faults are surfaced through IsFaulted below.
-                }
-
-                try
-                {
-                    await persister.ConfigureAwait(false);
-                }
-                catch
-                {
-                    // The persister swallows its own errors; this observes the task so it is never unobserved.
-                }
-
-                // If the user canceled, that outranks any incidental cancellation the workers observed.
-                token.ThrowIfCancellationRequested();
-
-                if (producer.IsFaulted)
-                {
-                    Exception inner = producer.Exception!.InnerExceptions[0];
-                    if (!(inner is OperationCanceledException))
+                    if (producer.IsFaulted)
+                    {
+                        Exception inner = producer.Exception!.InnerExceptions[0];
+                        if (!(inner is OperationCanceledException))
+                            throw inner;
+                    }
+                    foreach (Task worker in workerTasks)
+                    {
+                        if (!worker.IsFaulted)
+                            continue;
+                        Exception inner = worker.Exception!.InnerExceptions[0];
+                        if (inner is OperationCanceledException)
+                            continue;
                         throw inner;
+                    }
                 }
-                foreach (Task worker in workerTasks)
-                {
-                    if (!worker.IsFaulted)
-                        continue;
-                    Exception inner = worker.Exception!.InnerExceptions[0];
-                    if (inner is OperationCanceledException)
-                        continue;
-                    throw inner;
-                }
+            }
+            finally
+            {
+                ArmorTelemetry.Add(ArmorTelemetry.BackupWorkersCapacity, -workers, default(TagList));
+                ArmorTelemetry.Add(ArmorTelemetry.BackupQueueCapacity, -queueCapacity, default(TagList));
+
+                // Files still sitting in the queue when the run stops were never picked up; take them back
+                // out of the depth gauge so it returns to zero.
+                int leftover = 0;
+                while (channel.Reader.TryRead(out _))
+                    leftover++;
+                if (leftover > 0)
+                    ArmorTelemetry.Add(ArmorTelemetry.BackupQueueDepth, -leftover, default(TagList));
             }
 
             job.ChunksWritten += Interlocked.Read(ref state.ChunksWritten);
@@ -626,6 +859,7 @@ namespace Armor.Core.Engine
             {
                 // Vanished between scan and copy: drop it so it never enters the manifest.
                 await _Database.JobFiles.RemoveAsync(pending.Rowid, token).ConfigureAwait(false);
+                RecordFile(TelemetryNames.FileOutcomeVanished);
                 return;
             }
 
@@ -650,6 +884,8 @@ namespace Armor.Core.Engine
                 }
                 Interlocked.Add(ref state.ChunksReused, baselineEntry.ChunkHashes.Count);
                 Interlocked.Add(ref state.BytesDeduplicated, info.Length);
+                RecordChunks(TelemetryNames.ChunkDeduplicatedBaseline, baselineEntry.ChunkHashes.Count);
+                RecordBytes(TelemetryNames.BytesDeduplicated, info.Length);
             }
             else
             {
@@ -666,6 +902,9 @@ namespace Armor.Core.Engine
                     Diagnostics.ArmorLog.Warn("Skipping unreadable file '" + pending.Path + "': " + (unreadable.InnerException != null ? unreadable.InnerException.Message : unreadable.Message));
                     Interlocked.Increment(ref state.Skipped);
                     Interlocked.Add(ref state.SkippedBytes, pending.SizeBytes);
+                    ArmorTelemetry.RecordError(TelemetryNames.ComponentSource, unreadable.InnerException ?? unreadable);
+                    RecordFile(TelemetryNames.FileOutcomeSkipped);
+                    RecordBytes(TelemetryNames.BytesSkipped, pending.SizeBytes);
                     await _Database.JobFiles.RemoveAsync(pending.Rowid, token).ConfigureAwait(false);
                     return;
                 }
@@ -684,10 +923,14 @@ namespace Armor.Core.Engine
             // additive, so a crash between the two commits can only over-count a chunk (it lives a little
             // longer than needed), never under-count it (which could drop live data). Blobs are always
             // written before their references, so nothing referenced is ever missing.
+            long commitStart = Stopwatch.GetTimestamp();
             if (references.Count > 0)
                 await _Database.ChunkIndex.ReferenceBatchAsync(references, token).ConfigureAwait(false);
             string chunkJson = ArmorJson.Serialize(entry.ChunkHashes);
             await _Database.JobFiles.MarkDoneAsync(pending.Rowid, entry.SizeBytes, entry.ModifiedUtc, entry.ArchiveBit, chunkJson, token).ConfigureAwait(false);
+            ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, commitStart, TelemetryNames.FileStageCommit);
+            RecordFile(reuse ? TelemetryNames.FileOutcomeUnchanged : TelemetryNames.FileOutcomeCopied);
+            RecordBytes(TelemetryNames.BytesProcessed, info.Length);
 
             long doneNow = Interlocked.Increment(ref state.FilesDone);
             long bytesNow = Interlocked.Add(ref state.BytesDone, info.Length);
@@ -724,11 +967,13 @@ namespace Armor.Core.Engine
                     while (true)
                     {
                         byte[] chunk;
+                        long readStart = Stopwatch.GetTimestamp();
                         try
                         {
                             if (!await chunks.MoveNextAsync().ConfigureAwait(false))
                                 break;
                             chunk = chunks.Current;
+                            ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, readStart, TelemetryNames.FileStageRead);
                         }
                         catch (IOException ex)
                         {
@@ -739,7 +984,9 @@ namespace Armor.Core.Engine
                             throw new SourceUnreadableException(path, ex);
                         }
 
+                        long hashStart = Stopwatch.GetTimestamp();
                         string hash = Hasher.Sha256Hex(chunk);
+                        ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, hashStart, TelemetryNames.FileStageHash);
                         entry.ChunkHashes.Add(hash);
 
                         ChunkWriteResult written;
@@ -747,6 +994,8 @@ namespace Armor.Core.Engine
                         {
                             // Already durably written earlier this run — reference it without touching disk.
                             written = new ChunkWriteResult(false, 0, chunk.Length);
+                            RecordChunks(TelemetryNames.ChunkDeduplicatedRun, 1);
+                            RecordBytes(TelemetryNames.BytesDeduplicated, chunk.Length);
                         }
                         else
                         {
@@ -792,16 +1041,53 @@ namespace Armor.Core.Engine
 
         private static async Task<ChunkWriteResult> WriteChunkOnceAsync(string hash, byte[] chunk, ParallelBackupState state, CancellationToken token)
         {
-            if (await state.Repository.ChunkExistsAsync(hash, token).ConfigureAwait(false))
+            long checkStart = Stopwatch.GetTimestamp();
+            bool present = await state.Repository.ChunkExistsAsync(hash, token).ConfigureAwait(false);
+            ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, checkStart, TelemetryNames.FileStageDedupeCheck);
+            if (present)
             {
                 state.Present[hash] = 1;
+                RecordChunks(TelemetryNames.ChunkDeduplicatedTarget, 1);
+                RecordBytes(TelemetryNames.BytesDeduplicated, chunk.Length);
                 return new ChunkWriteResult(false, 0, chunk.Length);
             }
 
+            long frameStart = Stopwatch.GetTimestamp();
             byte[] stored = ChunkFramer.Frame(chunk, state.DataKey, hash);
+            ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, frameStart, TelemetryNames.FileStageFrame);
+
+            long uploadStart = Stopwatch.GetTimestamp();
             await state.Repository.WriteChunkAsync(hash, stored, token).ConfigureAwait(false);
+            ArmorTelemetry.RecordSince(ArmorTelemetry.BackupFileStageDuration, uploadStart, TelemetryNames.FileStageUpload);
             state.Present[hash] = 1;
+            RecordChunks(TelemetryNames.ChunkWritten, 1);
+            RecordBytes(TelemetryNames.BytesStored, stored.Length);
             return new ChunkWriteResult(true, stored.Length, chunk.Length);
+        }
+
+        private static void RecordFile(string outcome)
+        {
+            TagList tags = new TagList();
+            tags.Add(TelemetryNames.AttrFileOutcome, outcome);
+            ArmorTelemetry.Add(ArmorTelemetry.BackupFiles, 1, tags);
+        }
+
+        private static void RecordChunks(string outcome, long count)
+        {
+            if (count <= 0)
+                return;
+            TagList tags = new TagList();
+            tags.Add(TelemetryNames.AttrChunkOutcome, outcome);
+            ArmorTelemetry.Add(ArmorTelemetry.BackupChunks, count, tags);
+        }
+
+        private static void RecordBytes(string kind, long count)
+        {
+            if (count <= 0)
+                return;
+            TagList tags = new TagList();
+            tags.Add(TelemetryNames.AttrBytesKind, kind);
+            ArmorTelemetry.Add(ArmorTelemetry.BackupBytes, count, tags);
         }
 
         private static void ReportProgress(ParallelBackupState state, long filesDone, long bytesDone, string currentPath)
@@ -883,6 +1169,20 @@ namespace Armor.Core.Engine
             {
                 _Complete = true;
             }
+        }
+
+        /// <summary>A work-list file in the copy-stage hand-off queue, stamped with when it was queued so the wait for a worker is measurable.</summary>
+        private readonly struct QueuedFile
+        {
+            public QueuedFile(JobFileEntry entry, long enqueuedTimestamp)
+            {
+                Entry = entry;
+                EnqueuedTimestamp = enqueuedTimestamp;
+            }
+
+            public JobFileEntry Entry { get; }
+
+            public long EnqueuedTimestamp { get; }
         }
 
         /// <summary>Outcome of considering one chunk for storage: whether its blob was newly written and its sizes.</summary>

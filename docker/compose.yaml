@@ -1,0 +1,140 @@
+# Armor observability stack.
+#
+# Armor's agent and TUI run on the host (they are desktop processes, not containers), so this stack is
+# push-based: each process exports OTLP to the OpenTelemetry Collector published on 127.0.0.1:4317/4318,
+# and the collector fans out metrics to Prometheus, traces to Tempo, and logs to Loki. Grafana comes up
+# with all three datasources and the Armor dashboards provisioned.
+#
+#   docker compose -f docker/compose.yaml up -d
+#   then set "Telemetry": { "Enabled": true } in ~/.armor/armor.json (or ARMOR_TELEMETRY_ENABLED=true)
+#   and restart the agent / TUI.
+#
+#   Grafana     http://localhost:3000   admin / admin (local default; override GRAFANA_ADMIN_PASSWORD)
+#   Prometheus  http://localhost:9090
+#   Tempo API   http://localhost:3200
+#   Loki API    http://localhost:3100
+#
+# Every port is published on the loopback interface only: Prometheus, Tempo, Loki, and the collector
+# have no authentication of their own. Each host port can be moved with an environment variable
+# (ARMOR_GRAFANA_PORT, ARMOR_PROMETHEUS_PORT, ARMOR_TEMPO_PORT, ARMOR_LOKI_PORT, ARMOR_OTLP_GRPC_PORT,
+# ARMOR_OTLP_HTTP_PORT) when the default collides with another stack. All images are pinned.
+
+name: armor-observability
+
+services:
+
+  tempo:
+    container_name: 'armor-tempo'
+    # Pinned: later 'latest' builds reject the standard ingester/compactor sections of this config.
+    image: 'grafana/tempo:2.6.1'
+    command: ['-config.file=/etc/tempo.yaml']
+    ports:
+      - '127.0.0.1:${ARMOR_TEMPO_PORT:-3200}:3200'
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - armor-tempo-data:/var/tempo
+    healthcheck:
+      # The tempo image ships wget, not curl; /ready returns 503 until ready, then 200.
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3200/ready || exit 1']
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 40s
+
+  loki:
+    container_name: 'armor-loki'
+    image: 'grafana/loki:3.2.1'
+    command: ['-config.file=/etc/loki/local-config.yaml']
+    ports:
+      - '127.0.0.1:${ARMOR_LOKI_PORT:-3100}:3100'
+    volumes:
+      - armor-loki-data:/loki
+    healthcheck:
+      # The loki image ships wget, not curl; /ready returns 200 once the ring is up.
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3100/ready || exit 1']
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 30s
+
+  otel-collector:
+    container_name: 'armor-otel-collector'
+    image: 'otel/opentelemetry-collector-contrib:0.109.0'
+    command: ['--config=/etc/otel-collector.yaml']
+    ports:
+      - '127.0.0.1:${ARMOR_OTLP_GRPC_PORT:-4317}:4317'   # OTLP gRPC (Armor's default export target)
+      - '127.0.0.1:${ARMOR_OTLP_HTTP_PORT:-4318}:4318'   # OTLP HTTP
+    volumes:
+      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
+    # The collector image is distroless (no shell, curl, or wget), so it cannot run a probe of its own.
+    # Its backends must be healthy before it starts so nothing it forwards is dropped.
+    depends_on:
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+
+  prometheus:
+    container_name: 'armor-prometheus'
+    image: 'prom/prometheus:v3.5.4'
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yaml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+    ports:
+      - '127.0.0.1:${ARMOR_PROMETHEUS_PORT:-9090}:9090'
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./prometheus-rules.yaml:/etc/prometheus/prometheus-rules.yaml:ro
+      - armor-prometheus-data:/prometheus
+    extra_hosts:
+      # Lets the optional direct-scrape jobs in prometheus.yaml reach the host's 127.0.0.1-bound endpoints
+      # through Docker's host gateway.
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      # The prometheus image ships wget, not curl; /-/healthy returns 200 when ready.
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:9090/-/healthy || exit 1']
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 20s
+
+  grafana:
+    container_name: 'armor-grafana'
+    image: 'grafana/grafana-oss:13.0.2'
+    ports:
+      - '127.0.0.1:${ARMOR_GRAFANA_PORT:-3000}:3000'
+    environment:
+      # admin / admin is a local-development default. For any shared or hosted deployment set
+      # GRAFANA_ADMIN_PASSWORD (and GRAFANA_ADMIN_USER) in the environment or an .env file; never commit
+      # a real password here.
+      GF_SECURITY_ADMIN_USER: '${GRAFANA_ADMIN_USER:-admin}'
+      GF_SECURITY_ADMIN_PASSWORD: '${GRAFANA_ADMIN_PASSWORD:-admin}'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - armor-grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../assets/grafana:/var/lib/grafana/dashboards/armor:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:3000/api/health']
+      interval: 5s
+      timeout: 2s
+      retries: 2
+      start_period: 30s
+
+volumes:
+  armor-tempo-data:
+  armor-loki-data:
+  armor-prometheus-data:
+  armor-grafana-data:

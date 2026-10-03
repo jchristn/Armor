@@ -1,0 +1,51 @@
+# OpenTelemetry Collector for the Armor stack. Receives OTLP from the Armor agent and TUI (running on the
+# host) and fans it out: metrics to a Prometheus exporter that Prometheus scrapes, traces to Tempo, logs
+# to Loki. Instrument names stay dotted in Armor; the Prometheus exporter rewrites them to snake case and
+# appends unit and _total suffixes (armor.backup.duration -> armor_backup_duration_seconds).
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 2s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  batch:
+    timeout: 5s
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # service.name becomes the job label (armor-agent, armor-tui) and service.instance.id the instance
+    # label; the remaining resource attributes land on target_info rather than on every series.
+    resource_to_telemetry_conversion:
+      enabled: false
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

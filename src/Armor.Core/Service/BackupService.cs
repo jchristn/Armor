@@ -2,6 +2,7 @@ namespace Armor.Core.Service
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Engine;
@@ -10,6 +11,7 @@ namespace Armor.Core.Service
     using Armor.Core.Models;
     using Armor.Core.Scheduling;
     using Armor.Core.Storage;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// Runs a policy backup end-to-end: it resolves the policy's storage target and encryption key,
@@ -51,56 +53,123 @@ namespace Armor.Core.Service
             if (dataKey == null)
                 throw new ArgumentNullException(nameof(dataKey));
 
-            Policy policy = await RequirePolicyAsync(policyId, token).ConfigureAwait(false);
-            if (String.IsNullOrWhiteSpace(policy.StorageTargetId))
-                throw new ArmorException("Policy '" + policyId + "' has no storage target assigned.");
-            if (String.IsNullOrWhiteSpace(policy.EncryptionKeyId))
-                throw new ArmorException("Policy '" + policyId + "' has no encryption key assigned.");
-
-            EncryptionKey? encryptionKey = await _Context.Database.EncryptionKeys.ReadAsync(policy.EncryptionKeyId!, token).ConfigureAwait(false);
-            if (encryptionKey == null)
-                throw new ArmorException("Encryption key '" + policy.EncryptionKeyId + "' for policy '" + policyId + "' was not found.");
-
-            StorageTargetService targetService = new StorageTargetService(_Context.Database, _Context.CredentialProtector);
-            IStorageRepository repository = await targetService.BuildRepositoryAsync(policy.StorageTargetId!, token).ConfigureAwait(false);
-
-            // If this policy has produced backups before, its target must already hold a repository. A
-            // missing header means the target is not reachable (for example an unmounted drive) — fail
-            // rather than initialize a fresh repository somewhere it does not belong.
-            bool headerPresent = await repository.ObjectExistsAsync(RepositoryKeys.HeaderKey, token).ConfigureAwait(false);
-            if (!headerPresent)
+            // Root span of the whole request. The engine's backup.job span (and its stage:<name> children)
+            // and the retention.run span nest under it, as does every storage call.
+            Activity? activity = ArmorTelemetry.StartActivity(TelemetryNames.SpanBackupRun);
+            ArmorTelemetry.SetTag(activity, TelemetryNames.AttrPolicyId, policyId);
+            if (backupTypeOverride.HasValue)
+                ArmorTelemetry.SetTag(activity, TelemetryNames.AttrBackupType, ArmorTelemetry.BackupTypeLabel(backupTypeOverride.Value));
+            bool engineStarted = false;
+            try
             {
-                List<BackupJob> priorJobs = await _Context.Database.BackupJobs.ReadByPolicyAsync(policy.Id, token).ConfigureAwait(false);
-                bool hadCompletedBackup = false;
-                foreach (BackupJob prior in priorJobs)
+                BackupJob job = await RunCoreAsync(policyId, dataKey, backupTypeOverride, runRetention, token, progress, activity, () => engineStarted = true).ConfigureAwait(false);
+                ArmorTelemetry.MarkSuccess(activity);
+                return job;
+            }
+            catch (Exception ex)
+            {
+                // A failure inside the engine is already counted by the engine's job metrics; one before it
+                // (missing policy or key, unreachable target, held run lock) is counted here so every refused
+                // request is visible by error type.
+                if (!engineStarted && !(ex is OperationCanceledException))
+                    ArmorTelemetry.RecordError(TelemetryNames.ComponentBackup, ex);
+                ArmorTelemetry.MarkException(activity, ex);
+                throw;
+            }
+            finally
+            {
+                ArmorTelemetry.Stop(activity);
+            }
+        }
+
+        private async Task<BackupJob> RunCoreAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token, IProgress<BackupProgress>? progress, Activity? activity, Action onEngineStarted)
+        {
+            TelemetryStage prepareStage = TelemetryStage.Start(ArmorTelemetry.BackupStage, ArmorTelemetry.BackupStageDuration, TelemetryNames.StagePrepare);
+            Policy policy;
+            EncryptionKey? encryptionKey;
+            IStorageRepository repository;
+            try
+            {
+                policy = await RequirePolicyAsync(policyId, token).ConfigureAwait(false);
+                if (String.IsNullOrWhiteSpace(policy.StorageTargetId))
+                    throw new ArmorException("Policy '" + policyId + "' has no storage target assigned.");
+                if (String.IsNullOrWhiteSpace(policy.EncryptionKeyId))
+                    throw new ArmorException("Policy '" + policyId + "' has no encryption key assigned.");
+
+                encryptionKey = await _Context.Database.EncryptionKeys.ReadAsync(policy.EncryptionKeyId!, token).ConfigureAwait(false);
+                if (encryptionKey == null)
+                    throw new ArmorException("Encryption key '" + policy.EncryptionKeyId + "' for policy '" + policyId + "' was not found.");
+
+                StorageTargetService targetService = new StorageTargetService(_Context.Database, _Context.CredentialProtector);
+                repository = await targetService.BuildRepositoryAsync(policy.StorageTargetId!, token).ConfigureAwait(false);
+                ArmorTelemetry.SetTag(activity, TelemetryNames.AttrStorageTargetId, policy.StorageTargetId);
+                if (repository is InstrumentedStorageRepository instrumented)
+                    ArmorTelemetry.SetTag(activity, TelemetryNames.AttrStorageType, instrumented.StorageType);
+
+                // If this policy has produced backups before, its target must already hold a repository. A
+                // missing header means the target is not reachable (for example an unmounted drive) — fail
+                // rather than initialize a fresh repository somewhere it does not belong.
+                bool headerPresent = await repository.ObjectExistsAsync(RepositoryKeys.HeaderKey, token).ConfigureAwait(false);
+                if (!headerPresent)
                 {
-                    if (prior.Status == JobStatusEnum.Completed)
+                    List<BackupJob> priorJobs = await _Context.Database.BackupJobs.ReadByPolicyAsync(policy.Id, token).ConfigureAwait(false);
+                    bool hadCompletedBackup = false;
+                    foreach (BackupJob prior in priorJobs)
                     {
-                        hadCompletedBackup = true;
-                        break;
+                        if (prior.Status == JobStatusEnum.Completed)
+                        {
+                            hadCompletedBackup = true;
+                            break;
+                        }
                     }
+                    if (hadCompletedBackup)
+                        throw new ArmorException("Backup target for policy '" + policy.Name + "' is not reachable — no existing backup repository was found where one is expected. If this is a removable drive, make sure it is connected.");
                 }
-                if (hadCompletedBackup)
-                    throw new ArmorException("Backup target for policy '" + policy.Name + "' is not reachable — no existing backup repository was found where one is expected. If this is a removable drive, make sure it is connected.");
+                prepareStage.Succeed();
+            }
+            catch (Exception ex)
+            {
+                prepareStage.Fail(ex);
+                throw;
+            }
+            finally
+            {
+                prepareStage.Dispose();
             }
 
             RunLock runLock = new RunLock(_Context.Paths.StateDirectory);
             RunLockHandle? handle = runLock.TryAcquire(policy.Id);
             if (handle == null)
+            {
+                ArmorTelemetry.Add(ArmorTelemetry.BackupLockRejections, 1, default(TagList));
                 throw new PolicyAlreadyRunningException("Policy '" + policyId + "' is already running; the run lock is held.");
+            }
 
             using (handle)
             {
                 Diagnostics.ArmorLog.Info("Backup started for policy '" + policy.Name + "' (" + policy.Id + "), type " + (backupTypeOverride ?? policy.BackupType) + ".");
                 try
                 {
+                    onEngineStarted();
                     BackupEngine engine = new BackupEngine(_Context.Database);
                     BackupJob job = await engine.RunAsync(policy, repository, policy.StorageTargetId!, encryptionKey, dataKey, _Context.Settings.Chunking, backupTypeOverride, token, progress, policy.MaxParallelism).ConfigureAwait(false);
 
                     if (runRetention)
                     {
-                        RetentionManager retention = new RetentionManager(_Context.Database);
-                        await retention.RunAsync(policy, repository, policy.StorageTargetId!, dataKey, DateTime.UtcNow, token).ConfigureAwait(false);
+                        using (TelemetryStage retentionStage = TelemetryStage.Start(ArmorTelemetry.BackupStage, ArmorTelemetry.BackupStageDuration, TelemetryNames.StageRetention))
+                        {
+                            try
+                            {
+                                RetentionManager retention = new RetentionManager(_Context.Database);
+                                await retention.RunAsync(policy, repository, policy.StorageTargetId!, dataKey, DateTime.UtcNow, token).ConfigureAwait(false);
+                                retentionStage.Succeed();
+                            }
+                            catch (Exception ex)
+                            {
+                                retentionStage.Fail(ex);
+                                throw;
+                            }
+                        }
                     }
 
                     Diagnostics.ArmorLog.Info("Backup " + job.Status + " for policy '" + policy.Name + "': " + job.FileCount + " files, " + job.BytesTotal + " bytes, " + job.ChunksWritten + " chunks written, " + job.ChunksReused + " reused.");

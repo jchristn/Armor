@@ -5,6 +5,7 @@ namespace Armor.Tui
     using Armor.Core.Configuration;
     using Armor.Core.Diagnostics;
     using Armor.Core.Service;
+    using Armor.Telemetry;
     using TUIKit.Hosting;
 
     /// <summary>
@@ -42,11 +43,18 @@ namespace Armor.Tui
             ArmorLog.Info("Armor TUI starting.");
 
             ArmorContext context;
+            TelemetryHost? telemetry = null;
             try
             {
                 Console.WriteLine("Preparing Armor database…");
                 context = await ArmorContext.CreateAsync(paths, default, message => Console.WriteLine("  " + message)).ConfigureAwait(false);
-                await new StartupMaintenance(context).ReconcileInterruptedBackupsAsync().ConfigureAwait(false);
+
+                // The TUI's single telemetry host (inert unless Telemetry.Enabled is set); it has its own
+                // Prometheus port so it can run alongside the agent.
+                telemetry = TelemetryHost.Start(context.Settings.Telemetry, "tui", context.Settings.Telemetry.TuiPrometheusPort);
+                StartupMaintenance maintenance = new StartupMaintenance(context);
+                await maintenance.ReconcileInterruptedBackupsAsync().ConfigureAwait(false);
+                await maintenance.PublishLastBackupSuccessAsync().ConfigureAwait(false);
 
                 // Start the scheduler agent if it is not already running, so schedules fire while the
                 // dashboard is open (and it keeps running in the tray afterward). Best-effort — never blocks
@@ -55,6 +63,7 @@ namespace Armor.Tui
             }
             catch (Exception ex)
             {
+                telemetry?.Dispose();
                 string? report = ArmorLog.WriteCrash(ex, "starting the runtime context");
                 Console.Error.WriteLine("Armor failed to start: " + ex.Message);
                 if (report != null)
@@ -81,6 +90,7 @@ namespace Armor.Tui
             }
             finally
             {
+                telemetry?.Dispose();
                 context.Dispose();
                 ArmorLog.Flush();
                 ArmorLog.Dispose();

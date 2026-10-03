@@ -2,11 +2,13 @@ namespace Armor.Core.Service
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Enums;
     using Armor.Core.Models;
     using Armor.Core.Scheduling;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// One-time housekeeping run when an Armor process starts. Its job is to heal state a previous
@@ -38,6 +40,66 @@ namespace Armor.Core.Service
         /// <param name="token">Cancellation token.</param>
         /// <returns>The number of jobs marked interrupted.</returns>
         public async Task<int> ReconcileInterruptedBackupsAsync(CancellationToken token = default)
+        {
+            Activity? activity = ArmorTelemetry.StartActivity(TelemetryNames.SpanStartupReconcile);
+            try
+            {
+                int reconciled = await ReconcileCoreAsync(token).ConfigureAwait(false);
+                if (reconciled > 0)
+                    ArmorTelemetry.Add(ArmorTelemetry.StartupReconciledJobs, reconciled, default(TagList));
+                ArmorTelemetry.SetTag(activity, "armor.jobs.reconciled", reconciled);
+                ArmorTelemetry.MarkSuccess(activity);
+                return reconciled;
+            }
+            catch (Exception ex)
+            {
+                ArmorTelemetry.MarkException(activity, ex);
+                throw;
+            }
+            finally
+            {
+                ArmorTelemetry.Stop(activity);
+            }
+        }
+
+        /// <summary>
+        /// Seed the <see cref="TelemetryNames.BackupLastSuccess"/> gauge from the database: the completion time
+        /// of the newest successful backup across all policies. Without this the gauge would be absent after a
+        /// restart until the next backup succeeds, and a staleness alert could not tell "no backup for days"
+        /// from "the process just started". Best-effort: a read failure leaves the gauge unseeded.
+        /// </summary>
+        /// <param name="token">Cancellation token.</param>
+        /// <returns>The completion time that was published, or null when there is no completed backup.</returns>
+        public async Task<DateTime?> PublishLastBackupSuccessAsync(CancellationToken token = default)
+        {
+            try
+            {
+                DateTime? newest = null;
+                List<Policy> policies = await _Context.Database.Policies.ReadAllAsync(token).ConfigureAwait(false);
+                foreach (Policy policy in policies)
+                {
+                    token.ThrowIfCancellationRequested();
+                    BackupJob? latest = await _Context.Database.BackupJobs.ReadLatestCompletedAsync(policy.Id, token).ConfigureAwait(false);
+                    if (latest?.CompletedUtc != null && (newest == null || latest.CompletedUtc.Value > newest.Value))
+                        newest = latest.CompletedUtc.Value;
+                }
+
+                if (newest.HasValue)
+                    ArmorTelemetry.NoteBackupSucceeded(newest.Value);
+                return newest;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.ArmorLog.Debug("Could not seed the last-backup-success gauge: " + ex.Message);
+                return null;
+            }
+        }
+
+        private async Task<int> ReconcileCoreAsync(CancellationToken token)
         {
             List<BackupJob> jobs = await _Context.Database.BackupJobs.ReadAllAsync(token).ConfigureAwait(false);
             RunLock runLock = new RunLock(_Context.Paths.StateDirectory);

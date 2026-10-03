@@ -14,6 +14,7 @@ namespace Armor.Core.Service
     using Armor.Core.Security;
     using Armor.Core.Serialization;
     using Armor.Core.Storage;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// One restorable point-in-time discovered directly on a storage target during disaster recovery.
@@ -85,6 +86,29 @@ namespace Armor.Core.Service
         /// <returns>The recovery points.</returns>
         public async Task<List<RecoveryPoint>> BrowseAsync(CancellationToken token = default)
         {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.RecoveryBrowse))
+            {
+                try
+                {
+                    List<RecoveryPoint> result = await BrowseCoreAsync(token).ConfigureAwait(false);
+                    operation.Succeed();
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private static TelemetryOperation StartOperation(string operation)
+        {
+            return TelemetryOperation.Start(ArmorTelemetry.RecoveryOperations, ArmorTelemetry.RecoveryOperationDuration, TelemetryNames.AttrRecoveryOperation, operation, TelemetryNames.SpanRecoveryPrefix + operation, TelemetryNames.ComponentRecovery);
+        }
+
+        private async Task<List<RecoveryPoint>> BrowseCoreAsync(CancellationToken token)
+        {
             // Group the target's manifest and sidecar objects by run.
             Dictionary<string, RunKeys> runs = new Dictionary<string, RunKeys>(StringComparer.Ordinal);
 
@@ -152,6 +176,24 @@ namespace Armor.Core.Service
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="point"/> is null.</exception>
         public async Task<List<string>> ListFoldersAsync(RecoveryPoint point, CancellationToken token = default)
         {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.RecoveryListFolders))
+            {
+                try
+                {
+                    List<string> result = await ListFoldersCoreAsync(point, token).ConfigureAwait(false);
+                    operation.Succeed();
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private async Task<List<string>> ListFoldersCoreAsync(RecoveryPoint point, CancellationToken token)
+        {
             if (point == null)
                 throw new ArgumentNullException(nameof(point));
 
@@ -174,6 +216,24 @@ namespace Armor.Core.Service
         /// <returns>The file paths.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="point"/> is null.</exception>
         public async Task<List<string>> ListFilesAsync(RecoveryPoint point, CancellationToken token = default)
+        {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.RecoveryListFiles))
+            {
+                try
+                {
+                    List<string> result = await ListFilesCoreAsync(point, token).ConfigureAwait(false);
+                    operation.Succeed();
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private async Task<List<string>> ListFilesCoreAsync(RecoveryPoint point, CancellationToken token)
         {
             if (point == null)
                 throw new ArgumentNullException(nameof(point));
@@ -300,6 +360,29 @@ namespace Armor.Core.Service
         /// <exception cref="ArmorException">Thrown when the target holds no Armor repository or it is not password-protected.</exception>
         /// <exception cref="ArmorCryptoException">Thrown when the password does not unlock the repository.</exception>
         public async Task<RecoverySession> OpenAsync(string targetId, string password, CancellationToken token = default)
+        {
+            using (TelemetryOperation operation = StartOperation(TelemetryNames.RecoveryOpen))
+            {
+                try
+                {
+                    RecoverySession result = await OpenCoreAsync(targetId, password, token).ConfigureAwait(false);
+                    operation.Succeed();
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    operation.Fail(ex);
+                    throw;
+                }
+            }
+        }
+
+        private static TelemetryOperation StartOperation(string operation)
+        {
+            return TelemetryOperation.Start(ArmorTelemetry.RecoveryOperations, ArmorTelemetry.RecoveryOperationDuration, TelemetryNames.AttrRecoveryOperation, operation, TelemetryNames.SpanRecoveryPrefix + operation, TelemetryNames.ComponentRecovery);
+        }
+
+        private async Task<RecoverySession> OpenCoreAsync(string targetId, string password, CancellationToken token)
         {
             if (String.IsNullOrWhiteSpace(targetId))
                 throw new ArgumentNullException(nameof(targetId));

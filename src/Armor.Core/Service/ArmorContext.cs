@@ -7,6 +7,7 @@ namespace Armor.Core.Service
     using Armor.Core.Configuration;
     using Armor.Core.Database;
     using Armor.Core.Security;
+    using Armor.Core.Telemetry;
 
     /// <summary>
     /// The shared runtime context for an Armor process: loaded settings, resolved paths, the open
@@ -56,6 +57,7 @@ namespace Armor.Core.Service
 
             SettingsManager manager = new SettingsManager(context.Paths);
             context.Settings = await manager.LoadAsync(token).ConfigureAwait(false);
+            ArmorTelemetry.ObserveSettings(context.Settings);
 
             DatabaseSettings databaseSettings = new DatabaseSettings(context.Settings.DatabaseFilename ?? context.Paths.DefaultDatabasePath);
             databaseSettings.MaintenanceReporter = onMaintenance;
