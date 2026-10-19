@@ -167,6 +167,10 @@ namespace Armor.Core.Configuration
             if (TryGetInt("ARMOR_SCHEDULER_TICK_SECONDS", out tick))
                 settings.SchedulerTickSeconds = tick;
 
+            int stall;
+            if (TryGetInt("ARMOR_BACKUP_STALL_MINUTES", out stall))
+                settings.BackupStallMinutes = stall;
+
             int chunkMin;
             if (TryGetInt("ARMOR_CHUNK_MIN_BYTES", out chunkMin))
                 settings.Chunking.MinSizeBytes = chunkMin;

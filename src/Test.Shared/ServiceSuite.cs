@@ -679,6 +679,102 @@ namespace Test.Shared
                         }
                     }),
 
+                    Case("SchedulerIsolatesThrowingSchedule", "A schedule whose key provider throws does not stop the schedules after it", async ct =>
+                    {
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (ArmorContext context = await ArmorContext.CreateAsync(new ArmorPaths(ws.Combine("home")), ct).ConfigureAwait(false))
+                        {
+                            SmallChunking(context);
+                            EncryptionKeyService keyService = new EncryptionKeyService(context.Database);
+                            ProvisionedKey provisioned = await keyService.ProvisionAsync("sch-key", "pw", null, 50000, ct).ConfigureAwait(false);
+                            StorageTargetService targetService = new StorageTargetService(context.Database, context.CredentialProtector);
+                            StorageTarget target = DiskTarget(ws.Combine("repo"));
+                            await targetService.CreateAsync(target, ct).ConfigureAwait(false);
+
+                            List<Policy> policies = new List<Policy>();
+                            List<Schedule> schedules = new List<Schedule>();
+                            for (int i = 0; i < 2; i++)
+                            {
+                                string src = ws.Combine("src" + i);
+                                WriteFile(src, "f.txt", Content(20 + i, 3000));
+                                Policy policy = new Policy { Name = "policy-" + i };
+                                policy.IncludePaths.Add(src);
+                                policy.StorageTargetId = target.Id;
+                                policy.EncryptionKeyId = provisioned.Key.Id;
+                                await context.Database.Policies.CreateAsync(policy, ct).ConfigureAwait(false);
+                                policies.Add(policy);
+
+                                Schedule schedule = new Schedule { PolicyId = policy.Id, CronExpression = "*/5 * * * *", NextRunUtc = DateTime.UtcNow.AddMinutes(-1) };
+                                await context.Database.Schedules.CreateAsync(schedule, ct).ConfigureAwait(false);
+                                schedules.Add(schedule);
+                            }
+
+                            // The first schedule's key fails to unlock — before the fix this aborted the whole
+                            // tick, so the second schedule never ran. A stray cancellation is used because it
+                            // used to escape the tick (and end the agent's loop) as if the agent were stopping.
+                            string brokenPolicyId = schedules[0].PolicyId;
+                            Func<Policy, Task<byte[]?>> keys = p =>
+                            {
+                                if (p.Id == brokenPolicyId)
+                                    throw new TaskCanceledException("simulated I/O timeout");
+                                return Task.FromResult<byte[]?>(provisioned.DataKey);
+                            };
+
+                            int errors = 0;
+                            SchedulerService scheduler = new SchedulerService(context);
+                            int ran = await scheduler.TickAsync(keys, DateTime.UtcNow, ct, (_, __) => errors++).ConfigureAwait(false);
+
+                            Check.Equal(1, ran, "the healthy schedule ran");
+                            Check.Equal(1, errors, "the throwing schedule was reported as a failure");
+                            Schedule broken = (await context.Database.Schedules.ReadAsync(schedules[0].Id, ct).ConfigureAwait(false))!;
+                            Check.True(broken.NextRunUtc.HasValue && broken.NextRunUtc.Value <= DateTime.UtcNow, "the throwing schedule remained due");
+                            Schedule healthy = (await context.Database.Schedules.ReadAsync(schedules[1].Id, ct).ConfigureAwait(false))!;
+                            Check.True(healthy.LastRunUtc.HasValue, "the healthy schedule recorded its run");
+                        }
+                    }),
+
+                    Case("BackupSkipsNamedPipe", "A named pipe in the source does not hang the backup", async ct =>
+                    {
+                        // Opening a FIFO blocks until a writer appears, so before the fix the backup hung
+                        // forever. FIFOs are a Unix concept; elsewhere the case is a no-op.
+                        if (OperatingSystem.IsWindows())
+                            return;
+
+                        using (TempWorkspace ws = new TempWorkspace())
+                        using (ArmorContext context = await ArmorContext.CreateAsync(new ArmorPaths(ws.Combine("home")), ct).ConfigureAwait(false))
+                        {
+                            SmallChunking(context);
+                            EncryptionKeyService keyService = new EncryptionKeyService(context.Database);
+                            ProvisionedKey provisioned = await keyService.ProvisionAsync("fifo-key", "pw", null, 50000, ct).ConfigureAwait(false);
+                            StorageTargetService targetService = new StorageTargetService(context.Database, context.CredentialProtector);
+                            StorageTarget target = DiskTarget(ws.Combine("repo"));
+                            await targetService.CreateAsync(target, ct).ConfigureAwait(false);
+
+                            string source = ws.Combine("source");
+                            WriteFile(source, "good.txt", Content(30, 3000));
+                            string fifo = Path.Combine(source, "pipe");
+                            using (System.Diagnostics.Process mkfifo = System.Diagnostics.Process.Start("mkfifo", new[] { fifo }))
+                            {
+                                mkfifo.WaitForExit();
+                                Check.Equal(0, mkfifo.ExitCode, "mkfifo created the pipe");
+                            }
+                            File.CreateSymbolicLink(Path.Combine(source, "pipe-link"), fifo);
+
+                            Policy policy = new Policy { Name = "fifo-policy" };
+                            policy.IncludePaths.Add(source);
+                            policy.StorageTargetId = target.Id;
+                            policy.EncryptionKeyId = provisioned.Key.Id;
+                            await context.Database.Policies.CreateAsync(policy, ct).ConfigureAwait(false);
+
+                            BackupService backupService = new BackupService(context);
+                            Task<BackupJob> run = backupService.RunAsync(policy.Id, provisioned.DataKey, BackupTypeEnum.Full, true, ct);
+                            Task finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(60), ct)).ConfigureAwait(false);
+                            Check.True(finished == run, "the backup finished instead of blocking on the pipe");
+                            BackupJob job = await run.ConfigureAwait(false);
+                            Check.Equal(JobStatusEnum.Completed, job.Status, "backup completed");
+                        }
+                    }),
+
                     Case("SchedulerSkipsUnreachableRemovableTarget", "An offline removable target is skipped (not failed) and left due, while other schedules run", async ct =>
                     {
                         // A removable/USB target that is not connected must not be recorded as a failure on

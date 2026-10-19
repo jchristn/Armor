@@ -10,6 +10,7 @@ namespace Armor.Core.Configuration
     {
         private int _EngineConcurrency = 4;
         private int _SchedulerTickSeconds = 30;
+        private int _BackupStallMinutes = 30;
 
         /// <summary>
         /// UTC timestamp when the configuration was created. Default is the current UTC time.
@@ -102,6 +103,23 @@ namespace Armor.Core.Configuration
             set
             {
                 _SchedulerTickSeconds = Math.Clamp(value, 5, 3600);
+            }
+        }
+
+        /// <summary>
+        /// How long, in minutes, a scheduled backup may go without any progress (no storage call completing,
+        /// no scan batch, no file finishing) before the agent stops it as stalled and moves on to the other
+        /// schedules. Default is 30. Clamped to the range 1 to 1440.
+        /// </summary>
+        public int BackupStallMinutes
+        {
+            get
+            {
+                return _BackupStallMinutes;
+            }
+            set
+            {
+                _BackupStallMinutes = Math.Clamp(value, 1, 1440);
             }
         }
 

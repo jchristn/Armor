@@ -41,12 +41,16 @@ namespace Armor.Core.Service
         /// <param name="runRetention">Whether to apply retention after a successful backup.</param>
         /// <param name="token">Cancellation token.</param>
         /// <param name="progress">Optional observer notified as files are processed.</param>
+        /// <param name="onActivity">
+        /// Optional heartbeat invoked whenever the run makes progress: a storage call completes, a scan batch
+        /// lands, or a file finishes. A stall watchdog uses it to tell a slow run from a hung one.
+        /// </param>
         /// <returns>The completed backup-job record.</returns>
         /// <exception cref="ArgumentNullException">Thrown when a required argument is null.</exception>
         /// <exception cref="ArmorException">Thrown when the policy, target, or key is missing.</exception>
         /// <exception cref="TargetUnreachableException">Thrown when the storage target is not reachable (for example an unplugged removable drive).</exception>
         /// <exception cref="PolicyAlreadyRunningException">Thrown when the policy is already backing up (its run lock is held).</exception>
-        public async Task<BackupJob> RunAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token = default, IProgress<BackupProgress>? progress = null)
+        public async Task<BackupJob> RunAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token = default, IProgress<BackupProgress>? progress = null, Action? onActivity = null)
         {
             if (String.IsNullOrWhiteSpace(policyId))
                 throw new ArgumentNullException(nameof(policyId));
@@ -62,7 +66,7 @@ namespace Armor.Core.Service
             bool engineStarted = false;
             try
             {
-                BackupJob job = await RunCoreAsync(policyId, dataKey, backupTypeOverride, runRetention, token, progress, activity, () => engineStarted = true).ConfigureAwait(false);
+                BackupJob job = await RunCoreAsync(policyId, dataKey, backupTypeOverride, runRetention, token, progress, onActivity, activity, () => engineStarted = true).ConfigureAwait(false);
                 ArmorTelemetry.MarkSuccess(activity);
                 return job;
             }
@@ -82,7 +86,7 @@ namespace Armor.Core.Service
             }
         }
 
-        private async Task<BackupJob> RunCoreAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token, IProgress<BackupProgress>? progress, Activity? activity, Action onEngineStarted)
+        private async Task<BackupJob> RunCoreAsync(string policyId, byte[] dataKey, BackupTypeEnum? backupTypeOverride, bool runRetention, CancellationToken token, IProgress<BackupProgress>? progress, Action? onActivity, Activity? activity, Action onEngineStarted)
         {
             TelemetryStage prepareStage = TelemetryStage.Start(ArmorTelemetry.BackupStage, ArmorTelemetry.BackupStageDuration, TelemetryNames.StagePrepare);
             Policy policy;
@@ -105,6 +109,12 @@ namespace Armor.Core.Service
                 ArmorTelemetry.SetTag(activity, TelemetryNames.AttrStorageTargetId, policy.StorageTargetId);
                 if (repository is InstrumentedStorageRepository instrumented)
                     ArmorTelemetry.SetTag(activity, TelemetryNames.AttrStorageType, instrumented.StorageType);
+                if (onActivity != null)
+                {
+                    onActivity();
+                    repository = new ActivityStorageRepository(repository, onActivity);
+                    progress = new ActivityProgress(progress, onActivity);
+                }
 
                 // If this policy has produced backups before, its target must already hold a repository. A
                 // missing header means the target is not reachable (for example an unmounted drive) — fail
@@ -195,6 +205,24 @@ namespace Armor.Core.Service
             if (policy == null)
                 throw new ArmorException("Policy '" + policyId + "' was not found.");
             return policy;
+        }
+
+        private sealed class ActivityProgress : IProgress<BackupProgress>
+        {
+            private readonly IProgress<BackupProgress>? _Inner;
+            private readonly Action _OnActivity;
+
+            internal ActivityProgress(IProgress<BackupProgress>? inner, Action onActivity)
+            {
+                _Inner = inner;
+                _OnActivity = onActivity;
+            }
+
+            public void Report(BackupProgress value)
+            {
+                _OnActivity();
+                _Inner?.Report(value);
+            }
         }
     }
 }

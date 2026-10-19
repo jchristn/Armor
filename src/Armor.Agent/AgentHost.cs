@@ -70,8 +70,16 @@ namespace Armor.Agent
                 _Context = context;
                 _Token = token;
                 StartupMaintenance maintenance = new StartupMaintenance(context);
-                await maintenance.ReconcileInterruptedBackupsAsync(token).ConfigureAwait(false);
-                await maintenance.PublishLastBackupSuccessAsync(token).ConfigureAwait(false);
+                try
+                {
+                    await maintenance.ReconcileInterruptedBackupsAsync(token).ConfigureAwait(false);
+                    await maintenance.PublishLastBackupSuccessAsync(token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!token.IsCancellationRequested)
+                {
+                    // Housekeeping only; a busy database here must not keep the scheduler from starting.
+                    ArmorLog.Warn("Startup maintenance failed; continuing: " + ex.Message);
+                }
                 SchedulerService scheduler = new SchedulerService(context);
                 int tickSeconds = context.Settings.SchedulerTickSeconds;
 
@@ -93,13 +101,16 @@ namespace Armor.Agent
                             }).ConfigureAwait(false);
                         SetStatus(ran > 0 ? "Ran " + ran + " backup(s)" : "Idle");
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException) when (token.IsCancellationRequested)
                     {
                         break;
                     }
                     catch (Exception ex)
                     {
+                        // Includes a cancellation the agent did not request (an I/O timeout surfacing as
+                        // TaskCanceledException): report it and keep ticking rather than ending the loop.
                         SetStatus("Error: " + ex.Message);
+                        ArmorLog.Warn("Scheduler tick failed: " + ex.Message);
                     }
 
                     try
@@ -112,12 +123,13 @@ namespace Armor.Agent
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
             }
             catch (Exception ex)
             {
                 SetStatus("Fatal: " + ex.Message);
+                ArmorLog.Error("Scheduler loop stopped: " + ex.Message);
             }
             finally
             {

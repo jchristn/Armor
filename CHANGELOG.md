@@ -6,6 +6,24 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Stall watchdog for scheduled backups.** A scheduled backup that makes no progress (no storage call
+  completing, no scan batch, no file finishing) for `BackupStallMinutes` (default 30, or
+  `ARMOR_BACKUP_STALL_MINUTES`) is canceled — or abandoned if it cannot be canceled — and backed off as a
+  failure, so one hung run can no longer stop every other schedule.
+
+### Fixed
+- **The scheduler no longer stops firing after some backups fail.** Anything one schedule throws (a key
+  that fails to unlock, a busy database, a bad cron expression, an I/O timeout) is now that schedule's
+  backed-off failure instead of aborting the tick and starving the schedules after it. An unrequested
+  cancellation (for example an HTTP timeout) no longer ends the agent's scheduler loop for good, and a
+  failure in startup maintenance no longer keeps the scheduler from starting.
+- **A successful scheduled run is not repeated when recording it fails.** If the schedule's last/next run
+  cannot be saved (the database is briefly busy), it is applied from memory and saved on a later tick.
+- **Named pipes and device files no longer hang a backup.** Files reporting zero size (FIFOs, sockets,
+  devices, and links to them) are recorded as empty without being opened; opening a FIFO used to block
+  forever.
+
 ## [0.4.0] - 2026-10-03
 
 Observability, tray-started backups, scheduler backoff, and dependency updates.

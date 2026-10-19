@@ -2,6 +2,7 @@ namespace Test.Shared
 {
     using System;
     using System.Collections.Generic;
+    using System.Threading;
     using System.Threading.Tasks;
     using Armor.Core.Exceptions;
     using Armor.Core.Models;
@@ -103,6 +104,80 @@ namespace Test.Shared
                             Check.NotNull(third, "acquire succeeds after release");
                             third!.Dispose();
                             await Task.CompletedTask.ConfigureAwait(false);
+                        }
+                    }),
+
+                    Case("WatchdogPassesActiveOperation", "The stall watchdog lets a slow operation finish while it keeps reporting progress", async ct =>
+                    {
+                        int result = await StallWatchdog.RunAsync(async (token, heartbeat) =>
+                        {
+                            for (int i = 0; i < 8; i++)
+                            {
+                                await Task.Delay(50, token).ConfigureAwait(false);
+                                heartbeat();
+                            }
+                            return 42;
+                        }, TimeSpan.FromMilliseconds(250), ct).ConfigureAwait(false);
+                        Check.Equal(42, result, "an operation that keeps beating outlives the stall timeout");
+                    }),
+
+                    Case("WatchdogStopsSilentOperation", "The stall watchdog cancels an operation that stops reporting progress", async ct =>
+                    {
+                        bool canceled = false;
+                        bool threw = false;
+                        try
+                        {
+                            await StallWatchdog.RunAsync<int>(async (token, heartbeat) =>
+                            {
+                                try
+                                {
+                                    await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    canceled = true;
+                                    throw;
+                                }
+                                return 0;
+                            }, TimeSpan.FromMilliseconds(200), ct).ConfigureAwait(false);
+                        }
+                        catch (BackupStalledException)
+                        {
+                            threw = true;
+                        }
+                        Check.True(threw, "a silent operation is reported as stalled");
+                        Check.True(canceled, "the stalled operation was asked to cancel");
+                    }),
+
+                    Case("WatchdogAbandonsUncancellableOperation", "The stall watchdog returns control even when the operation ignores cancellation", async ct =>
+                    {
+                        TaskCompletionSource<int> never = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        Task<int> run = StallWatchdog.RunAsync<int>((token, heartbeat) => never.Task, TimeSpan.FromMilliseconds(200), ct);
+                        Task finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(10), ct)).ConfigureAwait(false);
+                        Check.True(finished == run, "the watchdog gave up on the hung operation");
+                        Check.True(run.IsFaulted && run.Exception!.GetBaseException() is BackupStalledException, "the abandonment is reported as a stall");
+                        never.SetResult(0);
+                    }),
+
+                    Case("WatchdogHonorsCallerCancellation", "Canceling the caller's token stops the watchdog with a cancellation", async ct =>
+                    {
+                        using (CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                        {
+                            cts.CancelAfter(100);
+                            bool canceled = false;
+                            try
+                            {
+                                await StallWatchdog.RunAsync<int>(async (token, heartbeat) =>
+                                {
+                                    await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false);
+                                    return 0;
+                                }, TimeSpan.FromMinutes(10), cts.Token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                canceled = true;
+                            }
+                            Check.True(canceled, "the caller's cancellation surfaces as a cancellation, not a stall");
                         }
                     }),
 

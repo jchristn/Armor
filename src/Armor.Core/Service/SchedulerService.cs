@@ -17,7 +17,9 @@ namespace Armor.Core.Service
     /// left due so it runs as soon as the key is unlocked, rather than being skipped forward. A schedule
     /// whose backup fails is also left due, but retried with exponential backoff (doubling from
     /// <see cref="InitialBackoff"/> up to <see cref="MaxBackoff"/>) so a persistent failure is not retried,
-    /// recorded, and reported on every tick. Backoff state is held in memory and resets when the instance
+    /// recorded, and reported on every tick. Each schedule is isolated: whatever one throws is treated as
+    /// its failure and the tick moves on, and each backup runs under a <see cref="StallWatchdog"/> so a hung
+    /// run cannot hold up the rest. Backoff state is held in memory and resets when the instance
     /// is recreated; reuse one instance across ticks for it to take effect.
     /// </summary>
     public sealed class SchedulerService
@@ -34,7 +36,9 @@ namespace Armor.Core.Service
 
         private readonly ArmorContext _Context;
         private readonly ScheduleEvaluator _Evaluator = new ScheduleEvaluator();
+        private TimeSpan _StallTimeout;
         private readonly Dictionary<string, FailureState> _Failures = new Dictionary<string, FailureState>(StringComparer.Ordinal);
+        private readonly Dictionary<string, RunMark> _UnsavedRuns = new Dictionary<string, RunMark>(StringComparer.Ordinal);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="SchedulerService"/> class.
@@ -44,6 +48,26 @@ namespace Armor.Core.Service
         public SchedulerService(ArmorContext context)
         {
             _Context = context ?? throw new ArgumentNullException(nameof(context));
+            StallTimeout = TimeSpan.FromMinutes(context.Settings.BackupStallMinutes);
+        }
+
+        /// <summary>
+        /// How long a scheduled backup may go without progress before it is stopped as stalled. Defaults to
+        /// the context's <c>BackupStallMinutes</c> setting. Must be positive.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when set to a value that is not positive.</exception>
+        public TimeSpan StallTimeout
+        {
+            get
+            {
+                return _StallTimeout;
+            }
+            set
+            {
+                if (value <= TimeSpan.Zero)
+                    throw new ArgumentOutOfRangeException(nameof(value), "Stall timeout must be positive.");
+                _StallTimeout = value;
+            }
         }
 
         /// <summary>
@@ -113,113 +137,168 @@ namespace Armor.Core.Service
             foreach (Schedule schedule in schedules)
             {
                 token.ThrowIfCancellationRequested();
-                if (!schedule.Enabled)
-                {
-                    RecordDecision(TelemetryNames.DecisionDisabled);
-                    continue;
-                }
-
-                if (!schedule.NextRunUtc.HasValue)
-                {
-                    schedule.NextRunUtc = _Evaluator.ComputeNextRun(schedule, nowUtc);
-                    await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
-                    RecordDecision(TelemetryNames.DecisionInitialized);
-                    continue;
-                }
-
-                if (!_Evaluator.IsDue(schedule, nowUtc))
-                {
-                    RecordDecision(TelemetryNames.DecisionNotDue);
-                    continue;
-                }
-
-                FailureState? failure;
-                if (_Failures.TryGetValue(schedule.Id, out failure) && nowUtc < failure.RetryAtUtc)
-                {
-                    RecordDecision(TelemetryNames.DecisionBackoff);
-                    counts.Pending++;
-                    continue;
-                }
-
-                Policy? policy = await _Context.Database.Policies.ReadAsync(schedule.PolicyId, token).ConfigureAwait(false);
-                if (policy == null || !policy.Enabled)
-                {
-                    _Evaluator.MarkRan(schedule, nowUtc);
-                    await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
-                    RecordDecision(TelemetryNames.DecisionPolicyDisabled);
-                    continue;
-                }
-
-                byte[]? dataKey = await keyProvider(policy).ConfigureAwait(false);
-                if (dataKey == null)
-                {
-                    RecordDecision(TelemetryNames.DecisionKeyUnavailable);
-                    counts.Pending++;
-                    continue;
-                }
-
-                BackupJob job;
                 try
                 {
-                    job = await backupService.RunAsync(policy.Id, dataKey, null, true, token).ConfigureAwait(false);
+                    if (await RunScheduleAsync(schedule, backupService, keyProvider, nowUtc, token, onCompleted, counts).ConfigureAwait(false))
+                        ran += 1;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
                     throw;
                 }
-                catch (TargetUnreachableException)
-                {
-                    // The target is temporarily unavailable — most often a removable/USB drive that is not
-                    // connected right now. This is not a failure: leave the schedule due (do not MarkRan) and
-                    // do not report an error, so no failure is recorded and no notification fires every tick.
-                    // The backup runs on the next tick after the drive is reconnected. Other schedules whose
-                    // targets are reachable — an S3 policy, say — are unaffected.
-                    Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': its target is not reachable yet. Will retry.");
-                    RecordDecision(TelemetryNames.DecisionTargetUnreachable);
-                    counts.Pending++;
-                    continue;
-                }
-                catch (PolicyAlreadyRunningException)
-                {
-                    // The policy is already backing up (a manual run holds the lock). Leave the schedule due
-                    // and retry next tick rather than recording a failure for a run that is proceeding fine.
-                    Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': a run is already in progress. Will retry.");
-                    RecordDecision(TelemetryNames.DecisionAlreadyRunning);
-                    counts.Pending++;
-                    continue;
-                }
                 catch (Exception ex)
                 {
-                    // One policy's failure (for example a remote target that cannot be contacted) must not
-                    // abort the tick or starve the other schedules. Leave this one due, but back off before
-                    // retrying so a persistent failure is not retried and reported on every tick.
+                    // Anything one schedule throws — its backup failing or stalling, its key failing to unlock,
+                    // a database write timing out, a bad cron expression — must not abort the tick or starve the
+                    // schedules after it. A cancellation the tick did not ask for (an HTTP client timeout, say)
+                    // lands here too. Leave this one due, but back off before retrying so a persistent failure
+                    // is not retried and reported on every tick.
                     RecordDecision(TelemetryNames.DecisionFailed);
                     counts.Pending++;
                     TimeSpan delay = NoteFailure(schedule.Id, nowUtc);
-                    Diagnostics.ArmorLog.Debug("Backup for policy '" + policy.Name + "' failed; retrying in " + delay + ".");
-                    onError?.Invoke(schedule, ex);
-                    continue;
-                }
-
-                _Failures.Remove(schedule.Id);
-                _Evaluator.MarkRan(schedule, nowUtc);
-                await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
-                ran += 1;
-                RecordDecision(TelemetryNames.DecisionRan);
-
-                // Surface the completed run to the host (the tray agent raises a desktop notification). Kept
-                // outside the try above so a reporting hiccup cannot be mistaken for a backup failure.
-                try
-                {
-                    onCompleted?.Invoke(schedule, policy, job);
-                }
-                catch (Exception)
-                {
-                    // Reporting a completion must never disrupt the scheduling loop.
+                    Diagnostics.ArmorLog.Warn("Schedule '" + schedule.Id + "' (policy " + schedule.PolicyId + ") failed; retrying in " + delay + ": " + ex.Message);
+                    try
+                    {
+                        onError?.Invoke(schedule, ex);
+                    }
+                    catch (Exception)
+                    {
+                        // Reporting a failure must never disrupt the scheduling loop.
+                    }
                 }
             }
 
             return ran;
+        }
+
+        private async Task<bool> RunScheduleAsync(Schedule schedule, BackupService backupService, Func<Policy, Task<byte[]?>> keyProvider, DateTime nowUtc, CancellationToken token, Action<Schedule, Policy, BackupJob>? onCompleted, TickCounts counts)
+        {
+            if (!schedule.Enabled)
+            {
+                RecordDecision(TelemetryNames.DecisionDisabled);
+                return false;
+            }
+
+            // A run whose completion could not be saved is applied from memory, so the schedule is not backed
+            // up again just because the database was briefly busy; the save is retried until it lands.
+            RunMark? unsaved;
+            if (_UnsavedRuns.TryGetValue(schedule.Id, out unsaved))
+            {
+                schedule.LastRunUtc = unsaved.LastRunUtc;
+                schedule.NextRunUtc = unsaved.NextRunUtc;
+                if (await TrySaveRunAsync(schedule, token).ConfigureAwait(false))
+                    _UnsavedRuns.Remove(schedule.Id);
+            }
+
+            if (!schedule.NextRunUtc.HasValue)
+            {
+                schedule.NextRunUtc = _Evaluator.ComputeNextRun(schedule, nowUtc);
+                await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
+                RecordDecision(TelemetryNames.DecisionInitialized);
+                return false;
+            }
+
+            if (!_Evaluator.IsDue(schedule, nowUtc))
+            {
+                RecordDecision(TelemetryNames.DecisionNotDue);
+                return false;
+            }
+
+            FailureState? failure;
+            if (_Failures.TryGetValue(schedule.Id, out failure) && nowUtc < failure.RetryAtUtc)
+            {
+                RecordDecision(TelemetryNames.DecisionBackoff);
+                counts.Pending++;
+                return false;
+            }
+
+            Policy? policy = await _Context.Database.Policies.ReadAsync(schedule.PolicyId, token).ConfigureAwait(false);
+            if (policy == null || !policy.Enabled)
+            {
+                _Evaluator.MarkRan(schedule, nowUtc);
+                await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
+                RecordDecision(TelemetryNames.DecisionPolicyDisabled);
+                return false;
+            }
+
+            byte[]? dataKey = await keyProvider(policy).ConfigureAwait(false);
+            if (dataKey == null)
+            {
+                RecordDecision(TelemetryNames.DecisionKeyUnavailable);
+                counts.Pending++;
+                return false;
+            }
+
+            BackupJob job;
+            try
+            {
+                // Each backup runs under a stall watchdog: one that stops making progress (a target that
+                // stopped answering, a source read that never returns) is stopped — or abandoned, if it cannot
+                // be stopped — so it cannot hold up every other schedule. The failure is backed off as usual.
+                string policyId = policy.Id;
+                job = await StallWatchdog.RunAsync(
+                    (runToken, heartbeat) => backupService.RunAsync(policyId, dataKey, null, true, runToken, null, heartbeat),
+                    StallTimeout,
+                    token).ConfigureAwait(false);
+            }
+            catch (TargetUnreachableException)
+            {
+                // The target is temporarily unavailable — most often a removable/USB drive that is not
+                // connected right now. This is not a failure: leave the schedule due (do not MarkRan) and
+                // do not report an error, so no failure is recorded and no notification fires every tick.
+                // The backup runs on the next tick after the drive is reconnected. Other schedules whose
+                // targets are reachable — an S3 policy, say — are unaffected.
+                Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': its target is not reachable yet. Will retry.");
+                RecordDecision(TelemetryNames.DecisionTargetUnreachable);
+                counts.Pending++;
+                return false;
+            }
+            catch (PolicyAlreadyRunningException)
+            {
+                // The policy is already backing up (a manual run holds the lock). Leave the schedule due
+                // and retry next tick rather than recording a failure for a run that is proceeding fine.
+                Diagnostics.ArmorLog.Debug("Skipping due schedule for policy '" + policy.Name + "': a run is already in progress. Will retry.");
+                RecordDecision(TelemetryNames.DecisionAlreadyRunning);
+                counts.Pending++;
+                return false;
+            }
+
+            _Failures.Remove(schedule.Id);
+            _Evaluator.MarkRan(schedule, nowUtc);
+            if (!await TrySaveRunAsync(schedule, token).ConfigureAwait(false))
+                _UnsavedRuns[schedule.Id] = new RunMark(schedule.LastRunUtc, schedule.NextRunUtc);
+            RecordDecision(TelemetryNames.DecisionRan);
+
+            // Surface the completed run to the host (the tray agent raises a desktop notification). Kept
+            // outside the try above so a reporting hiccup cannot be mistaken for a backup failure.
+            try
+            {
+                onCompleted?.Invoke(schedule, policy, job);
+            }
+            catch (Exception)
+            {
+                // Reporting a completion must never disrupt the scheduling loop.
+            }
+
+            return true;
+        }
+
+        private async Task<bool> TrySaveRunAsync(Schedule schedule, CancellationToken token)
+        {
+            try
+            {
+                await _Context.Database.Schedules.UpdateAsync(schedule, token).ConfigureAwait(false);
+                return true;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Diagnostics.ArmorLog.Warn("Could not record the run of schedule '" + schedule.Id + "'; will retry on the next tick: " + ex.Message);
+                return false;
+            }
         }
 
         private TimeSpan NoteFailure(string scheduleId, DateTime nowUtc)
@@ -251,6 +330,19 @@ namespace Armor.Core.Service
             internal int Count { get; set; } = 0;
 
             internal DateTime RetryAtUtc { get; set; } = DateTime.MinValue;
+        }
+
+        private sealed class RunMark
+        {
+            internal RunMark(DateTime? lastRunUtc, DateTime? nextRunUtc)
+            {
+                LastRunUtc = lastRunUtc;
+                NextRunUtc = nextRunUtc;
+            }
+
+            internal DateTime? LastRunUtc { get; }
+
+            internal DateTime? NextRunUtc { get; }
         }
     }
 }

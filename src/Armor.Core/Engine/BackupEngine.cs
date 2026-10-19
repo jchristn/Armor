@@ -889,10 +889,15 @@ namespace Armor.Core.Engine
             }
             else
             {
-                FileFrameResult framed;
+                FileFrameResult framed = default;
                 try
                 {
-                    framed = await FrameFileAsync(pending.Path, state, entry, references, token).ConfigureAwait(false);
+                    // Only open a file that has content. Named pipes, sockets, and devices report a size of
+                    // zero, and opening one can block forever (a FIFO waits for a writer; /dev/zero never
+                    // ends) where cancellation cannot reach. An empty regular file has nothing to read anyway,
+                    // so both are recorded as empty without being opened.
+                    if (ContentLength(info) > 0)
+                        framed = await FrameFileAsync(pending.Path, state, entry, references, token).ConfigureAwait(false);
                 }
                 catch (SourceUnreadableException unreadable)
                 {
@@ -935,6 +940,32 @@ namespace Armor.Core.Engine
             long doneNow = Interlocked.Increment(ref state.FilesDone);
             long bytesNow = Interlocked.Add(ref state.BytesDone, info.Length);
             ReportProgress(state, doneNow, bytesNow, entry.Path);
+        }
+
+        /// <summary>
+        /// The size of the content a read of the file would return: the file's own length, or for a symbolic
+        /// link the length of its final target, so a link to a pipe or device is recognized as one too.
+        /// </summary>
+        /// <exception cref="SourceUnreadableException">Thrown when the link cannot be resolved (a loop, or permission denied).</exception>
+        private static long ContentLength(FileInfo info)
+        {
+            try
+            {
+                if (info.LinkTarget == null)
+                    return info.Length;
+                FileSystemInfo? target = info.ResolveLinkTarget(true);
+                if (target is FileInfo file && file.Exists)
+                    return file.Length;
+                throw new SourceUnreadableException(info.FullName, new FileNotFoundException("The link's target does not exist or is not a file.", info.FullName));
+            }
+            catch (IOException ex)
+            {
+                throw new SourceUnreadableException(info.FullName, ex);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                throw new SourceUnreadableException(info.FullName, ex);
+            }
         }
 
         private async Task<FileFrameResult> FrameFileAsync(string path, ParallelBackupState state, ManifestFileEntry entry, List<ChunkIndexEntry> references, CancellationToken token)
