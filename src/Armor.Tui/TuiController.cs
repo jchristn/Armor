@@ -91,6 +91,9 @@ namespace Armor.Tui
         // trailing blank line — so the rectangle is framed by a linebreak above and below.
         private const int StatusHeight = 10;
 
+        // The startup splash closes itself after this long if no key is pressed first.
+        private static readonly TimeSpan SplashAutoDismiss = TimeSpan.FromSeconds(3);
+
         private readonly ArmorContext _Context;
         private readonly bool _ShowSplash;
 
@@ -362,8 +365,8 @@ namespace Armor.Tui
         /// base has no mouse hook, so for the life of the splash this turns off widget mouse-routing — which
         /// sends every mouse event to <see cref="TuiApplication.MouseReceived"/> instead of the panes behind
         /// the modal — and hit-tests each click against the link rectangles the splash registers as it draws.
-        /// A left click on a URL opens it in the browser; the splash stays open (only a key dismisses it), so
-        /// the link can be clicked and the splash read at leisure. Routing is restored when the splash closes.
+        /// A left click on a URL opens it in the browser and leaves the splash open. The splash closes on any
+        /// key or automatically after <see cref="SplashAutoDismiss"/>. Routing is restored when it closes.
         /// </summary>
         /// <param name="splash">The splash modal to show. Cannot be null.</param>
         private async Task ShowSplashWithClickableLinksAsync(ArmorSplashModal splash)
@@ -391,12 +394,19 @@ namespace Armor.Tui
             }
 
             app.MouseReceived += OnMouse;
+            using CancellationTokenSource autoDismiss = new CancellationTokenSource();
             try
             {
+                _ = Task.Delay(SplashAutoDismiss, autoDismiss.Token).ContinueWith(
+                    _ => Post(() => splash.RequestClose(0)),
+                    autoDismiss.Token,
+                    TaskContinuationOptions.OnlyOnRanToCompletion,
+                    TaskScheduler.Default);
                 await app.ShowAsync(splash).ConfigureAwait(false);
             }
             finally
             {
+                autoDismiss.Cancel();
                 app.MouseReceived -= OnMouse;
                 app.Links = null;
                 app.EnableMouseRouting = previousRouting;

@@ -12,6 +12,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ARMOR_BACKUP_STALL_MINUTES`) is canceled — or abandoned if it cannot be canceled — and backed off as a
   failure, so one hung run can no longer stop every other schedule.
 
+### Changed
+- **The TUI startup splash closes itself after 3 seconds.** Pressing any key still dismisses it
+  immediately; `--no-splash` still skips it.
+
 ### Fixed
 - **The scheduler no longer stops firing after some backups fail.** Anything one schedule throws (a key
   that fails to unlock, a busy database, a bad cron expression, an I/O timeout) is now that schedule's

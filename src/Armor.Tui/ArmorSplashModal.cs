@@ -9,10 +9,11 @@ namespace Armor.Tui
 
     /// <summary>
     /// A modal that renders multi-line content verbatim (no reflow) in a centered bordered box, with an
-    /// optional dimmed hint line at the bottom. Used for the startup splash. Any key dismisses it, so it
-    /// never blocks the user from reaching the menu. Any http/https URL in the content is drawn as an
-    /// underlined link and, when a <see cref="Links"/> registry is assigned, registered as a clickable hit
-    /// region so the host can open it in the browser.
+    /// optional dimmed hint line at the bottom. Used for the startup splash, which the host also closes
+    /// automatically after a few seconds. Any key dismisses it, so it never blocks the user from reaching
+    /// the menu. Any http/https URL in the content is drawn as an underlined link and, when a
+    /// <see cref="Links"/> registry is assigned, registered as a clickable hit region so the host can
+    /// open it in the browser.
     /// </summary>
     public sealed class ArmorSplashModal : Modal
     {
