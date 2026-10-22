@@ -41,6 +41,17 @@ dotnet run --project src/Test.Automated -f net10.0 -c Release
 
 You should see every case pass and an `OVERALL PASS` line at the end.
 
+### Install the macOS Finder app
+
+On macOS, run `./scripts/macos/install.sh` (or `reinstall.sh`) to build a
+self-contained `~/Applications/Armor.app`. Open it in Finder to start the menu-bar
+agent, then choose **Open** from its menu for the terminal console. Both executables
+ship together in the app; no .NET runtime or administrator access is required.
+`./go.sh` and `./scripts/macos/run.sh` refresh this app before running its console.
+`./scripts/macos/update.sh` pulls, refreshes the same app, and restarts a previously
+running agent. `run-at-startup.sh` registers the installed app's agent for login.
+The install and run scripts accept `net8.0` or `net10.0` (the default).
+
 ### Publish a runnable copy
 
 For day-to-day use — and so the tray's **Open** action can find the console — publish

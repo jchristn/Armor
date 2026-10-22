@@ -1,13 +1,12 @@
 #!/bin/sh
 # Update Armor from source: pull the latest code, rebuild, and republish the
-# agent and the TUI side by side into dist/ (the tray's Open action needs both
-# executables in the same folder). Restarts the agent if it was running.
+# Finder app in ~/Applications, with the agent and TUI side by side inside
+# the bundle. Restarts the agent if it was running.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LABEL="com.jchristn.armor.agent"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 cd "$REPO_ROOT"
 
 # If the launchd agent is loaded, boot it out first — otherwise KeepAlive would
@@ -29,15 +28,12 @@ pkill -x Armor.Agent 2>/dev/null || true
 
 git pull --ff-only || echo "git pull failed; rebuilding the checkout as-is." >&2
 
-dotnet publish src/Armor.Agent -c Release -f net10.0 -o dist
-dotnet publish src/Armor.Tui   -c Release -f net10.0 -o dist
-
-echo "Published Armor.Agent and Armor.Tui to $REPO_ROOT/dist."
+"$SCRIPT_DIR/install.sh" "$@"
 
 if [ "$SERVICE_WAS_LOADED" = "1" ]; then
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
+    "$SCRIPT_DIR/run-at-startup.sh"
     echo "Restarted the agent via launchd."
 elif [ "$AGENT_WAS_RUNNING" = "1" ]; then
-    "$REPO_ROOT/dist/Armor.Agent" >/dev/null 2>&1 &
+    open -a "$HOME/Applications/Armor.app"
     echo "Restarted the agent."
 fi

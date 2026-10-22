@@ -1,20 +1,17 @@
 #!/bin/sh
 # Register the Armor agent (the menu-bar scheduler) as a launchd user agent so
 # it starts at login. No sudo needed; everything lives under
-# ~/Library/LaunchAgents. Expects the published layout from GETTING_STARTED.md:
-# the agent and the TUI side by side in dist/ at the repository root (run
-# update.sh first).
+# ~/Library/LaunchAgents. Uses the Finder app installed by install.sh.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-AGENT_BIN="$REPO_ROOT/dist/Armor.Agent"
+AGENT_BIN="$HOME/Applications/Armor.app/Contents/MacOS/Armor.Agent"
 LABEL="com.jchristn.armor.agent"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 if [ ! -x "$AGENT_BIN" ]; then
     echo "Armor.Agent not found at $AGENT_BIN." >&2
-    echo "Run scripts/macos/update.sh first to build and publish it." >&2
+    echo "Run scripts/macos/install.sh first to install the application." >&2
     exit 1
 fi
 

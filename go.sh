@@ -9,6 +9,10 @@ cd "$(dirname "$0")"
 pkill -f "Armor.Tui" 2>/dev/null || true
 pkill -f "Armor.Agent" 2>/dev/null || true
 
+if [ "$(uname -s)" = Darwin ]; then
+    exec ./scripts/macos/run.sh "$@"
+fi
+
 cd src
 dotnet build
 cd Armor.Tui/bin/Debug/net10.0

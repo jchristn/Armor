@@ -13,6 +13,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure, so one hung run can no longer stop every other schedule.
 
 ### Changed
+- macOS install, reinstall, run, and update scripts now install a self-contained
+  `Armor.app` in `~/Applications`; login startup uses the installed app.
 - **The TUI startup splash closes itself after 3 seconds.** Pressing any key still dismisses it
   immediately; `--no-splash` still skips it.
 

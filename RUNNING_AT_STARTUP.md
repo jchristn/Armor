@@ -8,9 +8,11 @@ with the ready-made scripts under [`scripts/`](scripts/) and by hand.
 
 Everything below assumes the published layout from
 [`GETTING_STARTED.md`](GETTING_STARTED.md): the agent and the TUI published **side by
-side** into `dist/` at the repository root, so the tray's **Open** action can find the
+side** into `dist/` at the repository root (macOS uses
+`~/Applications/Armor.app/Contents/MacOS/`), so the tray's **Open** action can find the
 console. If you haven't published yet, run the `update` script for your platform first —
-it builds from source and publishes both executables into `dist/`.
+it builds from source and publishes both executables into `dist/` on Windows/Linux
+or installs `~/Applications/Armor.app` on macOS.
 
 ## The scripts
 
@@ -68,20 +70,20 @@ stop it).
 **Scripted:**
 
 ```bash
-sh scripts/macos/update.sh             # build from source and publish into dist/
+sh scripts/macos/update.sh             # build and install ~/Applications/Armor.app
 sh scripts/macos/run-at-startup.sh     # install the launchd agent and start it now
 sh scripts/macos/remove-from-startup.sh
 ```
 
 `run-at-startup.sh` installs a `launchd` user agent at
-`~/Library/LaunchAgents/com.jchristn.armor.agent.plist` that launches `dist/Armor.Agent`
+`~/Library/LaunchAgents/com.jchristn.armor.agent.plist` that launches `~/Applications/Armor.app/Contents/MacOS/Armor.Agent`
 at login and restarts it if it crashes (quitting cleanly from the tray menu stays
 quit). `remove-from-startup.sh` unloads and deletes the plist — note that unloading also
 stops a currently running agent.
 
 **By hand**, either:
 
-- Add `dist/Armor.Agent` under *System Settings → General → Login Items*, or
+- Add `~/Applications/Armor.app` under *System Settings → General → Login Items*, or
 - Write the plist yourself under `~/Library/LaunchAgents/` and load it with
   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jchristn.armor.agent.plist`.
 
@@ -139,7 +141,8 @@ Two Linux-specific notes:
    `Armor.Core.dll` open, and publishing over it would silently ship stale binaries.
 2. Runs `git pull --ff-only` (if the pull fails — offline, local changes — it warns and
    rebuilds the checkout as-is).
-3. Publishes `Armor.Agent` and `Armor.Tui` (Release, `net10.0`) side by side into `dist/`.
+3. Publishes `Armor.Agent` and `Armor.Tui` (Release, `net10.0`) side by side into `dist/`
+   on Windows/Linux, or into `~/Applications/Armor.app` on macOS.
 4. Restarts the agent if it was running before the update.
 
 Your data is untouched throughout: configuration, database, and state all live under
