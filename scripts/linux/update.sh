@@ -37,6 +37,6 @@ if [ "$SERVICE_WAS_ACTIVE" = "1" ]; then
     systemctl --user start armor-agent
     echo "Restarted the armor-agent systemd user service."
 elif [ "$AGENT_WAS_RUNNING" = "1" ]; then
-    "$REPO_ROOT/dist/Armor.Agent" >/dev/null 2>&1 &
+    nohup "$REPO_ROOT/dist/Armor.Agent" >/dev/null 2>&1 &
     echo "Restarted the agent."
 fi

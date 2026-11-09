@@ -4,7 +4,6 @@
 # ~/Library/LaunchAgents. Uses the Finder app installed by install.sh.
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENT_BIN="$HOME/Applications/Armor.app/Contents/MacOS/Armor.Agent"
 LABEL="com.jchristn.armor.agent"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"

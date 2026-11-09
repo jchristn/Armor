@@ -26,7 +26,7 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/d
 Description=Armor backup agent
 
 [Service]
-ExecStart=$AGENT_BIN
+ExecStart="$AGENT_BIN"
 Restart=on-failure
 
 [Install]
@@ -45,14 +45,14 @@ else
 Type=Application
 Name=Armor Agent
 Comment=Armor backup agent (system-tray scheduler)
-Exec=$AGENT_BIN
+Exec="$AGENT_BIN"
 X-GNOME-Autostart-enabled=true
 EOF
     echo "Installed $DESKTOP; the agent will start at your next desktop login."
     if pgrep -x Armor.Agent >/dev/null 2>&1; then
         echo "The agent is already running."
     else
-        "$AGENT_BIN" >/dev/null 2>&1 &
+        nohup "$AGENT_BIN" >/dev/null 2>&1 &
         echo "Started the agent now."
     fi
 fi

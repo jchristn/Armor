@@ -74,4 +74,8 @@ if name == 'iconutil': pathlib.Path(args[args.index('--output') + 1]).touch()
     plist = temp / 'home/Library/LaunchAgents/com.jchristn.armor.agent.plist'
     with plist.open('rb') as f:
         assert plistlib.load(f)['ProgramArguments'] == [str(app / 'Contents/MacOS/Armor.Agent')]
-    print('Armor macOS install/reinstall/run/update, both architectures/frameworks, failure preservation, and login path passed.')
+    p, calls = run('scripts/macos/uninstall.sh')
+    assert p.returncode == 0, p.stderr
+    assert not app.exists() and not plist.exists()
+    assert ['pkill', '-x', 'Armor.Agent'] in calls
+    print('Armor macOS install/reinstall/run/update, both architectures/frameworks, failure preservation, login path, and uninstall passed.')

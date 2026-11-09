@@ -16,21 +16,27 @@ or installs `~/Applications/Armor.app` on macOS.
 
 ## The scripts
 
-Each platform directory contains the same three scripts:
+Each platform directory (`windows`, `macos`, `linux`, `wsl`, `wsl2`) contains the same
+startup and update scripts:
 
 | Script | What it does |
 |---|---|
 | `run-at-startup` | Registers `dist/Armor.Agent` to start at login (and starts it now) |
 | `remove-from-startup` | Deregisters it from starting at login |
 | `update` | Pulls the latest source, rebuilds, republishes into `dist/`, and restarts the agent if it was running |
+| `install` / `reinstall` | Builds the current checkout and publishes into `dist/` (`~/Applications/Armor.app` on macOS); takes `net8.0` or `net10.0` |
+| `run` | Runs `install`, then the console |
+| `uninstall` | Removes the login registration, stops Armor, and deletes `dist/` (or the macOS app); `~/.armor` is kept |
 
 None of them need administrator/root rights — everything is registered per user.
 
 ```text
 scripts/
-├── windows/   run-at-startup.bat, remove-from-startup.bat, update.bat
-├── macos/     run-at-startup.sh,  remove-from-startup.sh,  update.sh
-└── linux/     run-at-startup.sh,  remove-from-startup.sh,  update.sh
+├── windows/   *.bat
+├── macos/     *.sh
+├── linux/     *.sh
+├── wsl/       *.sh  (WSL 1)
+└── wsl2/      *.sh  (WSL 2)
 ```
 
 On macOS and Linux, run them with `sh` (or `chmod +x` them once and run them directly):
@@ -132,6 +138,17 @@ Two Linux-specific notes:
 - **Lingering (headless servers):** a `systemd --user` service normally starts at login
   and stops at logout. To have the agent run whenever the machine is up, without anyone
   logged in, enable lingering once: `loginctl enable-linger $USER`.
+
+## WSL
+
+Use `scripts/wsl2` on WSL 2 and `scripts/wsl` on WSL 1, not `scripts/linux`. They use the
+Linux .NET SDK inside the distro (never the Windows one on the appended Windows `PATH`) and
+stop early on CRLF checkouts. Nothing starts systemd or desktop autostart entries when
+Windows logs in, so `run-at-startup.sh` puts a hidden launcher in the Windows Startup folder
+that runs the agent through `wsl.exe`. The agent is a GUI app: on WSL 2 it needs WSLg (which
+shows no tray icon; stop it with `pkill -x Armor.Agent`), and on WSL 1, which has no GUI,
+`run-at-startup.sh` refuses and points you at `scripts\windows\run-at-startup.bat`. Clone
+into the Linux file system (for example `~/src`), not `/mnt/c`.
 
 ## Updating
 
