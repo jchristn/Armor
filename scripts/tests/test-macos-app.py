@@ -51,9 +51,11 @@ if name == 'iconutil': pathlib.Path(args[args.index('--output') + 1]).touch()
 
     for script in ['scripts/macos/install.sh', 'scripts/macos/reinstall.sh', 'scripts/macos/run.sh', 'go.sh', 'scripts/macos/update.sh']:
         for tfm, arch in [('net8.0', 'x86_64'), ('net10.0', 'arm64')]:
+            app = temp / 'home/Applications/Armor.app'
+            if script.endswith('/install.sh'):
+                shutil.rmtree(app, ignore_errors=True)  # install.sh refuses to replace an existing app
             p, calls = run(script, tfm, TEST_ARCH=arch)
             assert p.returncode == 0, p.stderr
-            app = temp / 'home/Applications/Armor.app'
             with (app / 'Contents/Info.plist').open('rb') as f:
                 plist = plistlib.load(f)
             assert plist['CFBundleExecutable'] == 'Armor.Agent' and plist['LSUIElement']
@@ -77,5 +79,6 @@ if name == 'iconutil': pathlib.Path(args[args.index('--output') + 1]).touch()
     p, calls = run('scripts/macos/uninstall.sh')
     assert p.returncode == 0, p.stderr
     assert not app.exists() and not plist.exists()
-    assert ['pkill', '-x', 'Armor.Agent'] in calls
+    # uninstall refuses while Armor runs instead of killing it; it checks before removing anything.
+    assert ['pgrep', '-u', str(os.getuid()), '-x', 'Armor.Agent'] in calls
     print('Armor macOS install/reinstall/run/update, both architectures/frameworks, failure preservation, login path, and uninstall passed.')

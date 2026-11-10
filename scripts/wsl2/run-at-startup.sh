@@ -1,50 +1,88 @@
-#!/usr/bin/env sh
-# Register the Armor agent to start at Windows login, inside this distro. WSL 2 counterpart of
-# scripts/linux/run-at-startup.sh. Nothing runs systemd user services or desktop autostart
-# entries when Windows starts, so this installs a hidden launcher in the Windows Startup folder
-# (no admin rights) that runs dist/Armor.Agent through wsl.exe and keeps the distro up while it
-# runs. The agent is an Avalonia GUI app and needs WSLg; WSLg shows no tray icon, but the agent
-# still runs your schedules. Run scripts/wsl2/install.sh first.
-set -eu
-SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
-REPO_ROOT="$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)"
+#!/usr/bin/env bash
+# Register the Armor agent (the scheduler, dist/Armor.Agent) to start at Windows login inside this
+# distro, and start it now unless it is already running. systemd user services and desktop
+# autostart entries do not run at Windows login, so this installs a hidden launcher in the Windows
+# Startup folder that runs the agent through wsl.exe (no admin rights needed); the launcher keeps
+# the distro running while the agent runs. Removes any armor-agent systemd user service or desktop
+# autostart entry left by scripts/linux, so the agent does not start twice. Re-running refreshes
+# the launcher. Needs the published copy from install.sh.
+# WSL 2 version: the agent is a GUI (X11) app and needs WSLg, which sets DISPLAY. WSLg has no
+# system tray, so no tray icon appears; the agent still runs your schedules.
+# Usage: ./scripts/wsl2/run-at-startup.sh
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+die() { echo "Error: $*" >&2; exit 1; }
+usage() {
+    echo "Usage: scripts/wsl2/run-at-startup.sh"
+    echo "Registers dist/Armor.Agent to start at login and starts it now."
+}
+
+# shellcheck disable=SC2034 # read by _wsl-common.sh
 WSL_FLAVOR=wsl2
+# shellcheck source=_wsl-common.sh
 . "$SCRIPT_DIR/_wsl-common.sh"
 wsl_require
 wsl_sanitize_path
 wsl_check_repo "$REPO_ROOT"
 
-AGENT_BIN="$REPO_ROOT/dist/Armor.Agent"
-LAUNCHER=armor-agent
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+[ "$#" -eq 0 ] || die "Unexpected argument: $1 (this script takes no arguments)"
 
-# -f, not -x: a checkout on a Windows drive (DrvFs) may not report executable bits.
-if [ ! -f "$AGENT_BIN" ]; then
-    echo "Armor.Agent not found at $AGENT_BIN." >&2
-    echo "Run scripts/$WSL_FLAVOR/install.sh first to build and publish it." >&2
-    exit 1
-fi
-if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-    wsl_log "Warning: no DISPLAY or WAYLAND_DISPLAY is set, so WSLg looks unavailable. The agent is"
-    wsl_log "a GUI app and may fail to start. Update WSL (wsl --update) and check guiApplications=true"
-    wsl_log "in %UserProfile%\\.wslconfig."
-fi
-
-wsl_startup_install "$LAUNCHER" "$AGENT_BIN"
-echo "The agent will start at your next Windows login."
-
-if pgrep -x Armor.Agent >/dev/null 2>&1; then
-    echo "The agent is already running."
-else
-    # Start it through the launcher so it runs exactly as it will at login and keeps the
-    # distro alive after this terminal closes. Fall back to a plain background start.
-    VBS="$(wsl_startup_dir)/$LAUNCHER-wsl.vbs"
-    WSCRIPT="$(PATH="$WSL_ORIGINAL_PATH" command -v wscript.exe 2>/dev/null || echo /mnt/c/Windows/System32/wscript.exe)"
-    if [ -x "$WSCRIPT" ] && (cd /mnt/c 2>/dev/null || true; "$WSCRIPT" "$(wslpath -w "$VBS")") >/dev/null 2>&1; then
-        echo "Started the agent now."
-    else
-        nohup "$AGENT_BIN" >/dev/null 2>&1 &
-        echo "Started the agent now. It stops when this distro shuts down (after the last WSL"
-        echo "window closes) until the launcher starts it at the next login."
+# A framework-dependent app finds a .NET outside the default locations (for example ~/.dotnet from
+# dotnet-install.sh) only through DOTNET_ROOT; derive it from the dotnet on PATH and pass it on.
+if [ -z "${DOTNET_ROOT:-}" ] && command -v dotnet >/dev/null 2>&1; then
+    DOTNET_DIR="$(dirname "$(readlink -f "$(command -v dotnet)")")"
+    if [ -d "$DOTNET_DIR/host/fxr" ]; then
+        DOTNET_ROOT="$DOTNET_DIR"
+        export DOTNET_ROOT
     fi
 fi
-echo "Stop it with: pkill -x Armor.Agent   Undo with: scripts/$WSL_FLAVOR/remove-from-startup.sh"
+AGENT_BIN="$REPO_ROOT/dist/Armor.Agent"
+SERVICE="$HOME/.config/systemd/user/armor-agent.service"
+DESKTOP="$HOME/.config/autostart/armor-agent.desktop"
+# True when this user's agent or console is running (apphost launches, or dotnet <dll>).
+armor_running() {
+    pgrep -u "$(id -u)" -x Armor.Agent >/dev/null 2>&1 || pgrep -u "$(id -u)" -x Armor.Tui >/dev/null 2>&1 \
+        || pgrep -u "$(id -u)" -f 'Armor\.(Agent|Tui)\.dll' >/dev/null 2>&1
+}
+# True when this user's agent is running.
+agent_running() { pgrep -u "$(id -u)" -x Armor.Agent >/dev/null 2>&1 || pgrep -u "$(id -u)" -f 'Armor\.Agent\.dll' >/dev/null 2>&1; }
+
+# -f rather than -x: a checkout on a Windows drive (DrvFs) may not report executable bits.
+[ -f "$AGENT_BIN" ] || die "Armor is not installed at $REPO_ROOT/dist. Run scripts/wsl2/install.sh first."
+if [ -z "${DISPLAY:-}" ]; then
+    die "No display found (DISPLAY is unset). The Armor agent is a GUI (X11) app and needs WSLg (Windows 11, or Windows 10 with the Microsoft Store WSL). From Windows run: wsl --update, then wsl --shutdown, and reopen this shell. Or use scripts\\windows\\run-at-startup.bat from Windows."
+fi
+
+echo "Armor start at login (WSL 2)"
+# Replace anything scripts/linux/run-at-startup.sh may have created, so the agent does not start twice.
+if [ -f "$SERVICE" ] || [ -L "$HOME/.config/systemd/user/graphical-session.target.wants/armor-agent.service" ] \
+    || [ -L "$HOME/.config/systemd/user/default.target.wants/armor-agent.service" ]; then
+    systemctl --user disable --now armor-agent >/dev/null 2>&1 || true
+    rm -f "$SERVICE" "$HOME/.config/systemd/user/graphical-session.target.wants/armor-agent.service" \
+        "$HOME/.config/systemd/user/default.target.wants/armor-agent.service"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    echo "Removed the old armor-agent systemd user service."
+fi
+if [ -f "$DESKTOP" ]; then
+    rm -f "$DESKTOP"
+    echo "Removed the old desktop autostart entry."
+fi
+
+# The launcher starts from a fresh wsl.exe login, so pass the environment the agent needs explicitly.
+set -- env
+if [ -n "${DOTNET_ROOT:-}" ]; then set -- "$@" "DOTNET_ROOT=$DOTNET_ROOT"; fi
+wsl_startup_install armor-agent "$@" "$AGENT_BIN"
+echo "Registered $AGENT_BIN to start in WSL ($WSL_DISTRO_NAME) at Windows login (Windows Startup launcher)."
+
+if agent_running; then
+    echo "The agent is already running."
+else
+    # Start it through the same launcher, so it keeps running after this terminal closes.
+    wsl_startup_run armor-agent
+    echo "Started the agent now."
+fi
+echo "WSLg has no system tray, so no tray icon appears; the agent still runs your schedules."
+echo "Stop it with scripts/wsl2/kill-armor.sh; undo the registration with scripts/wsl2/remove-from-startup.sh."

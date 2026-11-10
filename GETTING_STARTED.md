@@ -47,10 +47,14 @@ On macOS, run `./scripts/macos/install.sh` (or `reinstall.sh`) to build a
 self-contained `~/Applications/Armor.app`. Open it in Finder to start the menu-bar
 agent, then choose **Open** from its menu for the terminal console. Both executables
 ship together in the app; no .NET runtime or administrator access is required.
-`./go.sh` and `./scripts/macos/run.sh` refresh this app before running its console.
+`install.sh` fails if the app is already installed; `reinstall.sh` replaces it, and both
+refuse while Armor is running (stop it with `./scripts/macos/kill-armor.sh`).
+`./go.sh` and `./scripts/macos/run.sh` stop Armor, refresh this app and run its console.
 `./scripts/macos/update.sh` pulls, refreshes the same app, and restarts a previously
 running agent. `run-at-startup.sh` registers the installed app's agent for login.
-The install and run scripts accept `net8.0` or `net10.0` (the default).
+The install, reinstall, run and update scripts accept `net8.0` or `net10.0` (the default).
+The same scripts exist for Windows, Linux and WSL under `scripts/`; see
+[`RUNNING_AT_STARTUP.md`](RUNNING_AT_STARTUP.md).
 
 ### Publish a runnable copy
 
