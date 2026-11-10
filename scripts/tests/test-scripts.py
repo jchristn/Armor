@@ -611,7 +611,7 @@ with tempfile.TemporaryDirectory(prefix='armor scripts ') as temp:
     fake_ldconfig.chmod(0o755)
     pm_dir = temp / 'pm'
     pm_dir.mkdir()
-    (pm_dir / 'sudo').write_text('#!/bin/sh\nprintf \'["sudo"]\\n\' >> "$CALL_LOG"\nexec "$@"\n')
+    (pm_dir / 'sudo').write_text('#!/bin/sh\nprintf \'["sudo"]\\n\' >> "$CALL_LOG"\n[ "$1" = -v ] && exit 0\nexec "$@"\n')
     (pm_dir / 'apt-cache').write_text('#!/bin/sh\nprintf \'libicu74\\nlibicu-dev\\n\'\n')
     (pm_dir / 'apt-get').write_text('#!/usr/bin/env python3\nimport json, os, pathlib, sys\n'
                                     'open(os.environ["CALL_LOG"], "a").write(json.dumps(["apt-get", *sys.argv[1:]]) + "\\n")\n'
@@ -651,6 +651,9 @@ with tempfile.TemporaryDirectory(prefix='armor scripts ') as temp:
     def apt_installs(calls):
         return [c for c in calls if c[:1] == ['apt-get'] and 'install' in c]
 
+    def packages(call):
+        return call[call.index('-y') + 1:]
+
     INSTALLERS = ['install', 'reinstall', 'update', 'run-at-startup']
     for platform in ['linux', 'wsl', 'wsl2']:
         clean()
@@ -675,13 +678,26 @@ with tempfile.TemporaryDirectory(prefix='armor scripts ') as temp:
             p, calls = run(platform, script, PATH=pm_path, **ld_env)
             check(p.returncode == 0, platform, script, p.stderr)
             installs = apt_installs(calls)
-            check(['apt-get', 'update', '-qq'] in calls and ['sudo'] in calls, platform, script, calls)
-            check(installs and installs[0][-3:] == ['libice6', 'libxi6', 'libicu74'], platform, script, installs)
+            updates = [c for c in calls if c[:1] == ['apt-get'] and c[-1:] == ['update']]
+            check(updates and 'DPkg::Lock::Timeout=300' in updates[0] and ['sudo'] in calls, platform, script, calls)
+            check(all('DPkg::Lock::Timeout=300' in c and c[c.index('install') + 1] == '-y' for c in installs), platform, script, installs)
+            check(installs and packages(installs[0]) == ['libice6', 'libxi6', 'libicu74'], platform, script, installs)
             optional = (['xclip'] if script != 'run-at-startup' else []) + (['wslu', 'xdg-utils'] if platform != 'linux' else [])
-            check([c[4:] for c in installs[1:]] == ([optional] if optional else []), platform, script, installs)
+            check([packages(c) for c in installs[1:]] == ([optional] if optional else []), platform, script, installs)
             check('wslu' not in json.dumps(calls) or platform != 'linux', 'no browser group on Linux', calls)
             check(f'System packages for Armor' in p.stderr, platform, script, p.stderr)
             run(platform, 'remove-from-startup', **ld_env)
+        # With timeout available, apt-get update runs under 'timeout --foreground'; same result.
+        timeout_dir = temp / 'timeout'
+        if not timeout_dir.exists():
+            timeout_dir.mkdir()
+            (timeout_dir / 'timeout').write_text('#!/bin/sh\nprintf \'["timeout", "%s"]\\n\' "$1" >> "$CALL_LOG"\n[ "$1" = --foreground ] && shift\nshift\nexec "$@"\n')
+            (timeout_dir / 'timeout').chmod(0o755)
+        reset()
+        write_cache(missing=['libXi.so.6'], icu=False)
+        p, calls = run(platform, 'reinstall', PATH=f'{timeout_dir}:{pm_path}', **ld_env)
+        check(p.returncode == 0 and ['timeout', '--foreground'] in calls and apt_installs(calls)
+              and packages(apt_installs(calls)[0]) == ['libxi6', 'libicu74'], platform, 'timeout', p.stderr, calls)
         # INSTALL_SYSTEM_PACKAGES=0 reports and exits before any build or registration.
         reset()
         write_cache(missing=['libXi.so.6'], wrong_arch=['libICE.so.6'])
