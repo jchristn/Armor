@@ -36,6 +36,8 @@ case "${1:-}" in
 esac
 [ "$#" -eq 0 ] || die "Unexpected argument: $1"
 wsl_require_cmd dotnet "Install the .NET SDK inside WSL: https://learn.microsoft.com/dotnet/core/install/linux"
+wsl_check_libs warning "Armor.Agent (which the console starts in the background)" "$WSL_AVALONIA_LIBS"
+wsl_check_clipboard "the Armor console (Armor.Tui)"
 # A framework-dependent app finds a .NET outside the default locations (for example ~/.dotnet from
 # dotnet-install.sh) only through DOTNET_ROOT; derive it from the dotnet on PATH and pass it on.
 if [ -z "${DOTNET_ROOT:-}" ] && command -v dotnet >/dev/null 2>&1; then
@@ -100,7 +102,8 @@ restart_agent() {
         echo "Restarted the agent through the Windows Startup launcher."
     elif [ "$AGENT_WAS_RUNNING" -eq 1 ]; then
         [ -f "$DEST/Armor.Agent" ] || { echo "Error: Cannot restart the agent: $DEST/Armor.Agent is missing." >&2; return 1; }
-        nohup "$DEST/Armor.Agent" >/dev/null 2>&1 &
+        # The agent gets the Windows PATH entries back (explorer.exe, wslview), in a subshell.
+        (wsl_prepare_app_env 2>/dev/null; nohup "$DEST/Armor.Agent" >/dev/null 2>&1 &)
         echo "Restarted the agent. It stops when this distro shuts down; run-at-startup.sh keeps it running."
     else
         echo "The agent was not running; the console starts it."
@@ -170,5 +173,7 @@ echo "[6/6] Starting the console..."
 if [ -z "${DISPLAY:-}" ]; then
     echo "Note: DISPLAY is not set. The console works, but WSL 1 has no WSLg and the agent is a GUI app, so scheduled backups do not run. Start an X server on Windows and set DISPLAY, or use the scripts\\windows scripts." >&2
 fi
+# Give the console the Windows PATH entries back (clip.exe, explorer.exe, wslview) and BROWSER=wslview.
+wsl_prepare_app_env
 trap - EXIT
 exec "$DEST/Armor.Tui"

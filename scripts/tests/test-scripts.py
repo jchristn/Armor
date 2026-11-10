@@ -86,7 +86,7 @@ if name == 'dotnet' and args[:1] == ['publish']:
     out = pathlib.Path(args[args.index('-o') + 1])
     out.mkdir(parents=True, exist_ok=True)
     exe = out / pathlib.Path(args[1]).stem
-    exe.write_text('#!/bin/sh\necho "ran $(basename "$0") DOTNET_ROOT=${DOTNET_ROOT:-}"\n'); exe.chmod(0o755)
+    exe.write_text('#!/bin/sh\necho "ran $(basename "$0") DOTNET_ROOT=${DOTNET_ROOT:-} PATH=$PATH"\n'); exe.chmod(0o755)
 '''
 FAKES = ['dotnet', 'uname', 'pgrep', 'pkill', 'systemctl', 'launchctl', 'git', 'open', 'sips', 'iconutil',
          'codesign', 'cmd.exe', 'wslpath', 'wscript.exe']
@@ -125,8 +125,10 @@ for d in UNIX:
         # Self-contained: sources only the WSL helper, never runs another script.
         for m in re.finditer(r'"\$(SCRIPT_DIR|REPO_ROOT)/([^"]+)"', text):
             target = m.group(2)
-            check(not target.endswith('.sh') or target == '_wsl-common.sh', 'calls another script', path, target)
-        check('../linux' not in text and 'scripts/common' not in text, 'delegates', path)
+            # Function libraries only: the WSL helper, and the native-library checks on Linux.
+            check(not target.endswith('.sh') or target in ('_wsl-common.sh', 'scripts/common/native-libs.sh'), 'calls another script', path, target)
+        check('../linux' not in text and not re.search(r'scripts/common/(?!native-libs\.sh)', text), 'delegates', path)
+        check(not re.search(r'^\s*(bash|sh|exec)\s+"?\$(SCRIPT_DIR|REPO_ROOT)', text, re.M), 'runs another script', path)
         if d.startswith('wsl'):
             check(f'WSL_FLAVOR={d}\n' in text and 'wsl_require\nwsl_sanitize_path\nwsl_check_repo "$REPO_ROOT"\n' in text, 'WSL preamble', path)
         if d == 'linux':
@@ -600,6 +602,135 @@ with tempfile.TemporaryDirectory(prefix='armor scripts ') as temp:
     check(r.returncode != 0 and 'Usage' in r.stderr, r.stderr)
     r = subprocess.run(['sh', str(repo / 'docker/update.sh')], env=dict(base_env, PATH=f'{bin_dir}:/usr/bin:/bin'), capture_output=True, text=True)
     check(r.returncode != 0 and 'docker was not found' in r.stderr, r.stderr)
+
+    # Native libraries (Linux and WSL): a fake ldconfig decides what the dynamic linker has; fake
+    # sudo/apt-get/apt-cache (in their own PATH directory) "install" packages by switching the cache
+    # to the full one.
+    fake_ldconfig = temp / 'fake-ldconfig'
+    fake_ldconfig.write_text('#!/bin/sh\nif [ -e "$MOCK_STATE/apt-installed" ]; then cat "$MOCK_LDCACHE_FULL"; else cat "$MOCK_LDCACHE"; fi\n')
+    fake_ldconfig.chmod(0o755)
+    pm_dir = temp / 'pm'
+    pm_dir.mkdir()
+    (pm_dir / 'sudo').write_text('#!/bin/sh\nprintf \'["sudo"]\\n\' >> "$CALL_LOG"\nexec "$@"\n')
+    (pm_dir / 'apt-cache').write_text('#!/bin/sh\nprintf \'libicu74\\nlibicu-dev\\n\'\n')
+    (pm_dir / 'apt-get').write_text('#!/usr/bin/env python3\nimport json, os, pathlib, sys\n'
+                                    'open(os.environ["CALL_LOG"], "a").write(json.dumps(["apt-get", *sys.argv[1:]]) + "\\n")\n'
+                                    'if "install" in sys.argv and os.environ.get("MOCK_APT_FAIL"): sys.exit(100)\n'
+                                    'if "install" in sys.argv: (pathlib.Path(os.environ["MOCK_STATE"]) / "apt-installed").touch()\n')
+    for f in pm_dir.iterdir():
+        f.chmod(0o755)
+    cache = temp / 'ld.so.cache.txt'
+    full_cache = temp / 'ld.so.cache.full.txt'
+    AVALONIA = ['libX11.so.6', 'libICE.so.6', 'libSM.so.6', 'libXext.so.6', 'libXrandr.so.2', 'libXi.so.6',
+                'libXcursor.so.1', 'libXfixes.so.3', 'libfontconfig.so.1']
+
+    def cache_text(missing=(), icu=True, wrong_arch=()):
+        lines = [f'{len(AVALONIA) + 1} libs found in cache /etc/ld.so.cache']
+        for so in AVALONIA:
+            if so in wrong_arch:
+                lines.append(f'\t{so} (libc6) => /usr/lib/i386-linux-gnu/{so}')
+            elif so not in missing:
+                lines.append(f'\t{so} (libc6,AArch64) => /usr/lib/aarch64-linux-gnu/{so}')
+        if icu:
+            lines.append('\tlibicuuc.so.74 (libc6,AArch64) => /usr/lib/aarch64-linux-gnu/libicuuc.so.74')
+        return '\n'.join(lines) + '\n'
+
+    def write_cache(**kw):
+        cache.write_text(cache_text(**kw))
+    full_cache.write_text(cache_text())
+    ld_env = dict(ARMOR_LDCONFIG=str(fake_ldconfig), WSL_LDCONFIG=str(fake_ldconfig), MOCK_LDCACHE=str(cache),
+                  MOCK_LDCACHE_FULL=str(full_cache))
+    pm_path = f'{bin_dir}:{pm_dir}:/usr/bin:/bin'
+    tools_dir = temp / 'tools'  # a clipboard tool, wslview and xdg-open, as if installed
+    tools_dir.mkdir()
+    for name in ['xclip', 'wslview', 'xdg-open']:
+        (tools_dir / name).write_text('#!/bin/sh\nexit 0\n')
+        (tools_dir / name).chmod(0o755)
+    tools_path = f'{tools_dir}:{pm_path}'
+
+    def apt_installs(calls):
+        return [c for c in calls if c[:1] == ['apt-get'] and 'install' in c]
+
+    INSTALLERS = ['install', 'reinstall', 'update', 'run-at-startup']
+    for platform in ['linux', 'wsl', 'wsl2']:
+        clean()
+        reset()
+        # Nothing missing: nothing is installed or reported.
+        write_cache()
+        p, calls = run(platform, 'install', PATH=tools_path, **ld_env)
+        check(p.returncode == 0 and not apt_installs(calls) and 'shared libraries' not in p.stderr and 'ICU' not in p.stderr
+              and not any(c[0] == 'apt-get' for c in calls), platform, 'all present', p.stderr)
+        for script in ['update', 'run-at-startup']:
+            p, calls = run(platform, script, PATH=tools_path, **ld_env)
+            check(p.returncode == 0 and not any(c[0] == 'apt-get' for c in calls), platform, script, p.stderr)
+        run(platform, 'remove-from-startup', **ld_env)
+        reset()
+        # Missing (libXi), wrong-architecture-only (an i386 libICE) and ICU: the install-type scripts
+        # install them with apt-get through sudo, required first, then the optional clipboard/browser tools.
+        for script in INSTALLERS:
+            reset()
+            if script == 'install':
+                shutil.rmtree(repo / 'dist', ignore_errors=True)
+            write_cache(missing=['libXi.so.6'], wrong_arch=['libICE.so.6'], icu=False)
+            p, calls = run(platform, script, PATH=pm_path, **ld_env)
+            check(p.returncode == 0, platform, script, p.stderr)
+            installs = apt_installs(calls)
+            check(['apt-get', 'update', '-qq'] in calls and ['sudo'] in calls, platform, script, calls)
+            check(installs and installs[0][-3:] == ['libice6', 'libxi6', 'libicu74'], platform, script, installs)
+            optional = (['xclip'] if script != 'run-at-startup' else []) + (['wslu', 'xdg-utils'] if platform != 'linux' else [])
+            check([c[4:] for c in installs[1:]] == ([optional] if optional else []), platform, script, installs)
+            check('wslu' not in json.dumps(calls) or platform != 'linux', 'no browser group on Linux', calls)
+            check(f'System packages for Armor' in p.stderr, platform, script, p.stderr)
+            run(platform, 'remove-from-startup', **ld_env)
+        # INSTALL_SYSTEM_PACKAGES=0 reports and exits before any build or registration.
+        reset()
+        write_cache(missing=['libXi.so.6'], wrong_arch=['libICE.so.6'])
+        for script in INSTALLERS:
+            p, calls = run(platform, script, PATH=pm_path, INSTALL_SYSTEM_PACKAGES='0', **ld_env)
+            check(p.returncode != 0 and 'were not installed automatically' in p.stderr and 'sudo apt install libice6 libxi6' in p.stderr
+                  and not apt_installs(calls) and not publishes(calls) and not any(c[0] in ('systemctl', 'wscript.exe') for c in calls),
+                  platform, script, p.stderr)
+        check(not desktop.exists() and not service.exists() and not (startup_dir.exists() and list(startup_dir.glob('*.vbs'))), platform)
+        # Help never installs anything.
+        for script in INSTALLERS:
+            p, calls = run(platform, script, '--help', PATH=pm_path, **ld_env)
+            check(p.returncode == 0 and not calls, platform, script, calls)
+        # A failing apt-get is fatal for required packages.
+        p, calls = run(platform, 'reinstall', PATH=pm_path, MOCK_APT_FAIL='1', **ld_env)
+        check(p.returncode != 0 and 'Could not install the required packages' in p.stderr and not publishes(calls), platform, p.stderr)
+        # Launchers only check: run warns (the console starts the agent), never installs.
+        p, calls = run(platform, 'run', PATH=pm_path, **ld_env)
+        check(p.returncode == 0 and not any(c[0] == 'apt-get' for c in calls)
+              and 'Warning: Armor.Agent (which the console starts in the background)' in p.stderr
+              and 'libICE.so.6 libXi.so.6' in p.stderr and "Unable to load shared library '...'" in p.stderr, platform, p.stderr)
+        check(p.stdout.rstrip().splitlines()[-1].startswith('ran Armor.Tui'), platform, p.stdout)
+        check('Note: copy to clipboard will not work in the Armor console (Armor.Tui)' in p.stderr, platform, p.stderr)
+        # Without a package manager, the required libraries stop run-at-startup with the install command.
+        p, calls = run(platform, 'run-at-startup', **ld_env)
+        check(p.returncode != 0 and 'sudo dnf install libICE libXi' in p.stderr and not any(c[0] in ('systemctl', 'wscript.exe') for c in calls),
+              platform, p.stderr)
+        # ICU missing: the launcher stops before building; invariant globalization opts out.
+        write_cache(icu=False)
+        p, calls = run(platform, 'run', PATH=pm_path, **ld_env)
+        check(p.returncode != 0 and '.NET needs ICU (libicu)' in p.stderr and "Couldn't find a valid ICU package" in p.stderr
+              and not publishes(calls) and not any(c[0] == 'apt-get' for c in calls), platform, p.stderr)
+        p, calls = run(platform, 'run', PATH=pm_path, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT='1', **ld_env)
+        check(p.returncode == 0, platform, 'invariant globalization', p.stderr)
+        # No ldconfig to ask: the checks never guess and nothing is installed.
+        write_cache(missing=AVALONIA, icu=False)
+        p, calls = run(platform, 'reinstall', PATH=tools_path, ARMOR_LDCONFIG='/nonexistent/ldconfig', WSL_LDCONFIG='/nonexistent/ldconfig',
+                       MOCK_LDCACHE=str(cache), MOCK_LDCACHE_FULL=str(full_cache))
+        check(p.returncode == 0 and not apt_installs(calls) and 'shared libraries' not in p.stderr and 'ICU' not in p.stderr,
+              platform, 'no ldconfig', p.stderr, calls)
+    # On WSL the console sees the Windows PATH entries that the build PATH drops.
+    for platform in ['wsl', 'wsl2']:
+        reset()
+        p, _ = run(platform, 'run', PATH=f'{bin_dir}:/usr/bin:/bin:/mnt/c/Windows/System32')
+        last = p.stdout.rstrip().splitlines()[-1]
+        check(p.returncode == 0 and last.startswith('ran Armor.Tui') and '/mnt/c/Windows/System32' in last, platform, last)
+        check('wslu xdg-utils' in p.stderr, 'wslview hint', p.stderr)
+    p, _ = run('linux', 'run', PATH=f'{bin_dir}:/usr/bin:/bin')
+    check('wslu' not in p.stderr, 'no WSL hints on Linux', p.stderr)
 
     # Root scripts: go.sh/reset.sh no longer pkill -f a bare name.
     for name in ['go.sh', 'reset.sh']:

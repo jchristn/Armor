@@ -24,6 +24,8 @@ if grep -qi microsoft /proc/version 2>/dev/null \
     && { [ -n "${WSL_DISTRO_NAME:-}" ] || [ -d /run/WSL ] || ls /proc/sys/fs/binfmt_misc/WSLInterop* >/dev/null 2>&1; }; then
     die "This is WSL. Use the same script in scripts/wsl2 (WSL 2) or scripts/wsl (WSL 1); they handle the Windows PATH, line endings and Windows startup."
 fi
+# shellcheck source=../common/native-libs.sh
+. "$REPO_ROOT/scripts/common/native-libs.sh"
 
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 [ "$#" -eq 0 ] || die "Unexpected argument: $1 (this script takes no arguments)"
@@ -49,6 +51,10 @@ armor_running() {
 agent_running() { pgrep -u "$(id -u)" -x Armor.Agent >/dev/null 2>&1 || pgrep -u "$(id -u)" -f 'Armor\.Agent\.dll' >/dev/null 2>&1; }
 
 [ -f "$AGENT_BIN" ] || die "Armor is not installed at $REPO_ROOT/dist. Run scripts/linux/install.sh first."
+# Install the system packages the agent needs (INSTALL_SYSTEM_PACKAGES=0 only lists them).
+native_install_deps "Armor.Agent" icu gui
+native_check_icu
+native_check_libs error "Armor.Agent" "$NATIVE_AVALONIA_LIBS"
 
 echo "Armor start at login (Linux)"
 # systemd only when this desktop session activates graphical-session.target (GNOME, KDE Plasma and

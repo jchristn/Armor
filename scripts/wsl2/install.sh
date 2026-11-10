@@ -34,6 +34,8 @@ case "${1:-}" in
     net*) die "Unsupported framework: $1. Supported frameworks: net8.0, net10.0." ;;
 esac
 [ "$#" -eq 0 ] || die "Unexpected argument: $1"
+# Install the system packages Armor needs (INSTALL_SYSTEM_PACKAGES=0 only lists them).
+wsl_install_deps "Armor" icu gui clipboard browser
 wsl_require_cmd dotnet "Install the .NET SDK inside WSL: https://learn.microsoft.com/dotnet/core/install/linux"
 
 DEST="$REPO_ROOT/dist"
@@ -77,5 +79,7 @@ for EXE in Armor.Agent Armor.Tui; do
     chmod +x "$DEST/$EXE" 2>/dev/null || true # DrvFs checkouts may not keep exec bits
 done
 echo "Installed Armor.Agent and Armor.Tui ($TFM) to $DEST."
+wsl_check_libs warning "Armor.Agent" "$WSL_AVALONIA_LIBS"
+wsl_check_clipboard "the Armor console (Armor.Tui)"
 echo "Start the console with $DEST/Armor.Tui (it starts the agent too), or register the agent for login with scripts/wsl2/run-at-startup.sh."
 echo "Done."

@@ -26,6 +26,8 @@ if grep -qi microsoft /proc/version 2>/dev/null \
     && { [ -n "${WSL_DISTRO_NAME:-}" ] || [ -d /run/WSL ] || ls /proc/sys/fs/binfmt_misc/WSLInterop* >/dev/null 2>&1; }; then
     die "This is WSL. Use the same script in scripts/wsl2 (WSL 2) or scripts/wsl (WSL 1); they handle the Windows PATH, line endings and Windows startup."
 fi
+# shellcheck source=../common/native-libs.sh
+. "$REPO_ROOT/scripts/common/native-libs.sh"
 
 TFM=net10.0
 case "${1:-}" in
@@ -36,6 +38,9 @@ case "${1:-}" in
 esac
 [ "$#" -eq 0 ] || die "Unexpected argument: $1"
 command -v dotnet >/dev/null 2>&1 || die "dotnet was not found on PATH. Install the .NET SDK: https://learn.microsoft.com/dotnet/core/install/linux"
+native_check_icu
+native_check_libs warning "Armor.Agent (which the console starts in the background)" "$NATIVE_AVALONIA_LIBS"
+native_check_clipboard "the Armor console (Armor.Tui)"
 # A framework-dependent app finds a .NET outside the default locations (for example ~/.dotnet from
 # dotnet-install.sh) only through DOTNET_ROOT; derive it from the dotnet on PATH and pass it on.
 if [ -z "${DOTNET_ROOT:-}" ] && command -v dotnet >/dev/null 2>&1; then

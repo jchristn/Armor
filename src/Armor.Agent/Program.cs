@@ -59,6 +59,17 @@ namespace Armor.Agent
             catch (Exception ex)
             {
                 ArmorLog.WriteCrash(ex, "running the agent");
+                string? library = MissingNativeLibrary(ex);
+                if (library != null && OperatingSystem.IsLinux())
+                {
+                    // Building never loads the X11 client libraries, so a minimal install or a stock WSL
+                    // distro (WSLg supplies only the display) only finds out here. Say how to fix it.
+                    Console.Error.WriteLine("Armor.Agent cannot start: " + library);
+                    Console.Error.WriteLine("Install the X11 client libraries Avalonia needs:");
+                    Console.Error.WriteLine("  Debian/Ubuntu: sudo apt install libx11-6 libice6 libsm6 libxext6 libxrandr2 libxi6 libxcursor1 libxfixes3 libfontconfig1");
+                    Console.Error.WriteLine("  Fedora:        sudo dnf install libX11 libICE libSM libXext libXrandr libXi libXcursor libXfixes fontconfig");
+                    return 1;
+                }
                 return 2;
             }
             finally
@@ -67,6 +78,33 @@ namespace Armor.Agent
                 ArmorLog.Flush();
                 ArmorLog.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Find a missing native library anywhere in an exception chain (Avalonia wraps the loader's
+        /// failure in type-initializer and aggregate exceptions).
+        /// </summary>
+        /// <param name="ex">The exception to inspect.</param>
+        /// <returns>The loader's message when a <see cref="DllNotFoundException"/> is in the chain; otherwise null.</returns>
+        private static string? MissingNativeLibrary(Exception ex)
+        {
+            for (Exception? current = ex; current != null; current = current.InnerException)
+            {
+                if (current is DllNotFoundException)
+                    return current.Message;
+
+                if (current is AggregateException aggregate)
+                {
+                    foreach (Exception inner in aggregate.InnerExceptions)
+                    {
+                        string? found = MissingNativeLibrary(inner);
+                        if (found != null)
+                            return found;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static void RegisterGlobalHandlers()

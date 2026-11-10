@@ -55,6 +55,10 @@ agent_running() { pgrep -u "$(id -u)" -x Armor.Agent >/dev/null 2>&1 || pgrep -u
 if [ -z "${DISPLAY:-}" ]; then
     die "No display found (DISPLAY is unset). The Armor agent is a GUI (X11) app and needs WSLg (Windows 11, or Windows 10 with the Microsoft Store WSL). From Windows run: wsl --update, then wsl --shutdown, and reopen this shell. Or use scripts\\windows\\run-at-startup.bat from Windows."
 fi
+# Install the system packages the agent needs (INSTALL_SYSTEM_PACKAGES=0 only lists them).
+wsl_install_deps "Armor.Agent" icu gui browser
+wsl_check_icu
+wsl_check_libs error "Armor.Agent" "$WSL_AVALONIA_LIBS"
 
 echo "Armor start at login (WSL 2)"
 # Replace anything scripts/linux/run-at-startup.sh may have created, so the agent does not start twice.

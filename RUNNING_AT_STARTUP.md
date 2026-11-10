@@ -179,6 +179,33 @@ system (for example `~/src`), not `/mnt/c`. When a checkout on a Windows drive i
 WSL scripts refuse to delete a Windows build (`dist\Armor.Agent.exe`) and the Windows scripts
 refuse to delete a WSL build (`dist/Armor.Agent`).
 
+## Linux and WSL: system packages
+
+The agent is an Avalonia app, so it loads the X11 client libraries at startup; the console copies
+with `wl-copy`, `xclip` or `xsel`; and every .NET program needs ICU. WSLg supplies only the display,
+and the stock WSL images (like minimal and server installs) lack these packages. Building never
+loads them, so without them Armor builds fine and then fails when it starts, with:
+
+```text
+System.DllNotFoundException: Unable to load shared library 'libICE.so.6'
+Couldn't find a valid ICU package installed on the system
+```
+
+`install`, `reinstall`, `update` and `run-at-startup` on Linux and WSL install the missing packages
+themselves (with `apt-get` or `dnf`, through `sudo`). Set `INSTALL_SYSTEM_PACKAGES=0` to have them
+list the packages and stop instead. `run` only checks and warns. To install them by hand on
+Debian/Ubuntu:
+
+```bash
+sudo apt install libx11-6 libice6 libsm6 libxext6 libxrandr2 libxi6 libxcursor1 libxfixes3 libfontconfig1
+sudo apt install libicu74        # or the libicuNN your release has (apt-cache pkgnames libicu)
+sudo apt install xclip           # copy to clipboard from the console
+sudo apt install wslu xdg-utils  # WSL only: open links in the Windows browser
+```
+
+On Fedora: `sudo dnf install libX11 libICE libSM libXext libXrandr libXi libXcursor libXfixes fontconfig libicu xclip`.
+If the agent still hits a missing library, it prints the same install commands and exits with code 1.
+
 ## Updating
 
 `update` is the same on every platform, differing only in syntax:

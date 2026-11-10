@@ -29,6 +29,8 @@ if grep -qi microsoft /proc/version 2>/dev/null \
     && { [ -n "${WSL_DISTRO_NAME:-}" ] || [ -d /run/WSL ] || ls /proc/sys/fs/binfmt_misc/WSLInterop* >/dev/null 2>&1; }; then
     die "This is WSL. Use the same script in scripts/wsl2 (WSL 2) or scripts/wsl (WSL 1); they handle the Windows PATH, line endings and Windows startup."
 fi
+# shellcheck source=../common/native-libs.sh
+. "$REPO_ROOT/scripts/common/native-libs.sh"
 
 TFM=net10.0
 case "${1:-}" in
@@ -38,7 +40,10 @@ case "${1:-}" in
     net*) die "Unsupported framework: $1. Supported frameworks: net8.0, net10.0." ;;
 esac
 [ "$#" -eq 0 ] || die "Unexpected argument: $1"
+# Install the system packages Armor needs (INSTALL_SYSTEM_PACKAGES=0 only lists them).
+native_install_deps "Armor" icu gui clipboard
 command -v dotnet >/dev/null 2>&1 || die "dotnet was not found on PATH. Install the .NET SDK: https://learn.microsoft.com/dotnet/core/install/linux"
+native_check_icu
 command -v git >/dev/null 2>&1 || die "git was not found on PATH. Install git (for example: sudo apt install git)."
 # A framework-dependent app finds a .NET outside the default locations (for example ~/.dotnet from
 # dotnet-install.sh) only through DOTNET_ROOT; derive it from the dotnet on PATH and pass it on.
@@ -161,6 +166,8 @@ done
 VERIFIED=1
 rm -rf "$PREVIOUS"
 echo "Installed Armor.Agent and Armor.Tui ($TFM) to $DEST."
+native_check_libs warning "Armor.Agent" "$NATIVE_AVALONIA_LIBS"
+native_check_clipboard "the Armor console (Armor.Tui)"
 echo "[6/6] Restarting the agent..."
 restart_agent
 STOPPED=0
