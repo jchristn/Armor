@@ -31,7 +31,7 @@ dotnet run --project src/Armor.Publisher -- --channel <id> [options]
 | --- | --- | --- | --- | --- |
 | `inno` | agent | Windows | Inno Setup 6 (`iscc`) | signed `.exe` + Scheduled-Task startup |
 | `dmg` | agent | macOS | `hdiutil`, `pkgbuild`, `codesign`, `notarytool` | notarized `.dmg` + `.pkg` (installs LaunchAgent) |
-| `debrpm` | agent | Linux | `fpm` | `.deb` + `.rpm` with systemd unit |
+| `debrpm` | agent | Linux | `fpm` | `.deb` + `.rpm` with desktop autostart entry |
 | `appimage` | agent | Linux | `appimagetool` | `.AppImage` |
 | `winget` | agent | any | — | `microsoft/winget-pkgs` manifests |
 | `choco` | agent | any (pack: Win) | `choco` | `.nuspec` + install script → `.nupkg` |
@@ -52,6 +52,10 @@ wrong OS. Full coverage runs through [`.github/workflows/release.yml`](../../.gi
 which fans out one job per OS on a `v*` tag and produces every installer and package-manager entry.
 
 ## End-user install commands (the compliance target)
+
+These package-manager entries are **not published yet**; their CI jobs are off until the repository
+variable `ENABLE_PACKAGE_MANAGERS` is `true` (see [`RELEASING_INSTALLERS.md`](../../RELEASING_INSTALLERS.md)).
+Today Armor ships as the downloadable installers on GitHub Releases.
 
 ```
 # Windows

@@ -48,8 +48,17 @@ namespace Armor.Publisher.Channels
                 // .desktop and icon are required by appimagetool.
                 string desktop = Path.Combine(appDir, $"{appName.ToLowerInvariant()}.desktop");
                 File.WriteAllText(desktop, DesktopEntry(context, appName));
-                // A tiny placeholder icon keeps appimagetool happy until real art is added.
-                File.WriteAllText(Path.Combine(appDir, $"{appName.ToLowerInvariant()}.png"), "");
+                string iconPath = Path.Combine(appDir, $"{appName.ToLowerInvariant()}.png");
+                string logo = Path.Combine(context.RepoRoot, "assets", "logo.png");
+                if (File.Exists(logo))
+                {
+                    File.Copy(logo, iconPath, overwrite: true);
+                }
+                else
+                {
+                    Console.WriteLine("[appimage] WARNING: assets/logo.png not found; using an empty placeholder icon.");
+                    File.WriteAllText(iconPath, "");
+                }
 
                 string appRun = Path.Combine(appDir, "AppRun");
                 File.WriteAllText(appRun, AppRunScript(context));
@@ -63,6 +72,9 @@ namespace Armor.Publisher.Channels
                 Console.WriteLine($"[appimage] building {outName}");
                 // ARCH env tells appimagetool the target architecture for cross builds.
                 Environment.SetEnvironmentVariable("ARCH", archTag);
+                // appimagetool is itself an AppImage; extract-and-run lets it work where FUSE is
+                // missing (CI runners, containers).
+                Environment.SetEnvironmentVariable("APPIMAGE_EXTRACT_AND_RUN", "1");
                 ProcessRunner.Run("appimagetool", new[] { appDir, outPath });
 
                 context.EmitChecksum(outPath);

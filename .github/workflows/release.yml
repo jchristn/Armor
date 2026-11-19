@@ -1,9 +1,16 @@
 name: Release
 
-# Full installer + package-manager pipeline. On a v* tag this fans out to native OS runners that
-# each build, sign, and upload the artifacts they own; then a release job publishes a GitHub Release
-# with SHA256SUMS; then downstream jobs publish the apt/yum repos to GitHub Pages and generate/submit
-# the package-manager entries. publisher.json is the source of truth; src/Armor.Publisher does the work.
+# Installer pipeline. On a v* tag this fans out to native OS runners that each build (and, once
+# configured, sign) the installers they own; then a release job publishes a GitHub Release with every
+# installer, SHA256SUMS, and release notes taken from CHANGELOG.md. publisher.json is the source of
+# truth; src/Armor.Publisher does the work. RELEASING_INSTALLERS.md documents the release process.
+#
+# Running it by hand (workflow_dispatch) builds every installer and uploads them as workflow
+# artifacts without publishing a release; use that to check a release before tagging it.
+#
+# The package-manager jobs (apt/yum repos on GitHub Pages, scoop/winget/brew manifests, NuGet tool,
+# Chocolatey) are wired but off. They run only on a tag and only when the repository variable
+# ENABLE_PACKAGE_MANAGERS is "true", because their registries and tokens do not exist yet.
 #
 # VERSION: the Publisher takes the version from <Version> in src/Directory.Build.props, and asset URLs
 # are built as v<version>. Bump that version and tag the release v<version> to match (e.g. Version
@@ -112,27 +119,51 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { path: dl }
-      - name: Stage assets and compute SHA256SUMS
+      - name: Check the tag matches the project version
         id: ver
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          props_version="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Directory.Build.props | head -n 1)"
+          if [ "$tag_version" != "$props_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$props_version</Version> in src/Directory.Build.props."
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+      - name: Build release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          # The section runs from "## [<version>]" to the next "## [" heading.
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no '## [$VERSION]' section. Add one before tagging."
+            exit 1
+          fi
+          { cat notes.md; echo; sed "s/{version}/$VERSION/g" .github/release-install-notes.md; } > release-notes.md
+      - uses: actions/download-artifact@v4
+        with: { path: dl, pattern: installers-* }
+      - name: Stage assets and compute SHA256SUMS
         run: |
           mkdir -p artifacts
           find dl -type f ! -name '*.sha256' -exec cp {} artifacts/ \;
-          cd artifacts && sha256sum * > SHA256SUMS
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          cd artifacts && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: Armor ${{ steps.ver.outputs.version }}
+          body_path: release-notes.md
           files: artifacts/*
-          generate_release_notes: true
 
   # ---- apt / yum repositories published to GitHub Pages --------------------------------------
 
   linux-repos:
     needs: [release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && vars.ENABLE_PACKAGE_MANAGERS == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -160,7 +191,7 @@ jobs:
   managers:
     needs: [release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && vars.ENABLE_PACKAGE_MANAGERS == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -200,7 +231,7 @@ jobs:
   choco:
     needs: [release]
     runs-on: windows-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && vars.ENABLE_PACKAGE_MANAGERS == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

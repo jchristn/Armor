@@ -6,13 +6,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-19
+
+First release with downloadable installers on
+[GitHub Releases](https://github.com/jchristn/Armor/releases) for Windows, macOS, and Linux.
+
 ### Added
+- **Installers on GitHub Releases.** Each `v*` tag builds a Windows setup `.exe` (x64, ARM64), a macOS
+  `.pkg` and `.dmg` (Apple Silicon, Intel), and Linux `.deb`, `.rpm`, and AppImage packages (x64, ARM64),
+  and publishes them with a `SHA256SUMS` file. The builds are not code-signed yet, so each OS asks you to
+  approve the first launch; see [`INSTALL.md`](INSTALL.md). The release process is documented in
+  [`RELEASING_INSTALLERS.md`](RELEASING_INSTALLERS.md).
 - **Stall watchdog for scheduled backups.** A scheduled backup that makes no progress (no storage call
   completing, no scan batch, no file finishing) for `BackupStallMinutes` (default 30, or
   `ARMOR_BACKUP_STALL_MINUTES`) is canceled — or abandoned if it cannot be canceled — and backed off as a
   failure, so one hung run can no longer stop every other schedule.
 
 ### Changed
+- **Linux packages start the agent with your desktop session.** The `.deb` and `.rpm` install an
+  `/etc/xdg/autostart` entry and an application-menu entry instead of a root systemd service, so the tray
+  agent runs as you, with your display and your `~/.armor`. They also declare the ICU, X11, and
+  fontconfig libraries the agent needs.
+- **The macOS app is ad-hoc signed and has its icon.** An unsigned build now gets the normal
+  "unidentified developer" prompt you can approve instead of being reported as damaged. The `.dmg`
+  includes an Applications shortcut, and quitting the agent from the menu bar no longer makes the
+  `.pkg`'s LaunchAgent restart it.
 - macOS install, reinstall, run, and update scripts now install a self-contained
   `Armor.app` in `~/Applications`; login startup uses the installed app.
 - **The TUI startup splash closes itself after 3 seconds.** Pressing any key still dismisses it

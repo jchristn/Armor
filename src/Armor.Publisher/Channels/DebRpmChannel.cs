@@ -6,8 +6,11 @@ namespace Armor.Publisher.Channels
 {
     /// <summary>
     /// Linux .deb/.rpm channel. Publishes the agent per linux rid, lays out a common install tree
-    /// (payload under /opt/armor, a /usr/bin symlink, and a systemd unit), and builds both a .deb
-    /// and an .rpm from that same tree with fpm. Requires Linux with fpm installed.
+    /// (payload under /opt/armor, /usr/bin symlinks, an application-menu entry with icon, and a
+    /// desktop autostart entry), and builds both a .deb and an .rpm from that same tree with fpm.
+    /// The agent is a tray app that belongs to the logged-in user (it needs their display and their
+    /// ~/.armor), so it starts with each user's desktop session through /etc/xdg/autostart rather
+    /// than as a root system service. Requires Linux with fpm installed.
     /// </summary>
     public sealed class DebRpmChannel : IChannel
     {
@@ -35,11 +38,14 @@ namespace Armor.Publisher.Channels
                 if (Directory.Exists(root)) Directory.Delete(root, true);
                 Directory.CreateDirectory(Path.Combine(root, "opt", "armor"));
                 Directory.CreateDirectory(Path.Combine(root, "usr", "bin"));
-                Directory.CreateDirectory(Path.Combine(root, "usr", "lib", "systemd", "system"));
+                Directory.CreateDirectory(Path.Combine(root, "etc", "xdg", "autostart"));
+                Directory.CreateDirectory(Path.Combine(root, "usr", "share", "applications"));
 
                 FileSystemUtil.CopyTree(payloadDir, Path.Combine(root, "opt", "armor"));
                 BundleLicense(context, root, pkg);
-                File.WriteAllText(Path.Combine(root, "usr", "lib", "systemd", "system", "armor-agent.service"), SystemdUnit(context));
+                File.WriteAllText(Path.Combine(root, "etc", "xdg", "autostart", "armor-agent.desktop"), AutostartEntry());
+                File.WriteAllText(Path.Combine(root, "usr", "share", "applications", "armor-agent.desktop"), MenuEntry(context));
+                BundleIcon(context, root);
                 // Relative symlink so it resolves against the package's install root.
                 ProcessRunner.Run("ln", new[] { "-sf", $"/opt/armor/{context.ExeName}", Path.Combine(root, "usr", "bin", "armor-agent") });
 
@@ -79,7 +85,7 @@ namespace Armor.Publisher.Channels
             if (File.Exists(outPath)) File.Delete(outPath);
 
             Console.WriteLine($"[debrpm] fpm -t {target} ({arch})");
-            ProcessRunner.Run("fpm", new[]
+            List<string> args = new List<string>
             {
                 "-s", "dir", "-t", target,
                 "-n", pkg,
@@ -92,9 +98,15 @@ namespace Armor.Publisher.Channels
                 "--after-install", afterInstall,
                 "--before-remove", beforeRemove,
                 "--package", outPath,
-                "-C", root,
-                "opt", "usr"
-            });
+                "-C", root
+            };
+            foreach (string dep in Dependencies(target))
+            {
+                args.Add("-d");
+                args.Add(dep);
+            }
+            args.AddRange(new[] { "opt", "usr", "etc" });
+            ProcessRunner.Run("fpm", args);
 
             context.EmitChecksum(outPath);
             return outPath;
@@ -127,19 +139,74 @@ namespace Armor.Publisher.Channels
         private static string DescriptionOrDefault(ChannelContext c) =>
             string.IsNullOrWhiteSpace(c.Config.Project.Description) ? "Armor backup agent" : c.Config.Project.Description;
 
-        private static string SystemdUnit(ChannelContext context) =>
-            "[Unit]\nDescription=Armor backup agent\nAfter=network.target\n\n" +
-            $"[Service]\nExecStart=/opt/armor/{context.ExeName}\nRestart=on-failure\n\n" +
-            "[Install]\nWantedBy=multi-user.target\n";
+        /// <summary>
+        /// Shared libraries the self-contained agent loads at startup: ICU for .NET globalization,
+        /// and the X11 client libraries and fontconfig that Avalonia (the tray UI) needs. These are
+        /// the same libraries scripts/common/native-libs.sh checks for. ICU's Debian package name
+        /// carries its version, so the .deb accepts any of the versions current distros ship.
+        /// </summary>
+        private static IEnumerable<string> Dependencies(string target)
+        {
+            if (target == "deb")
+            {
+                yield return "libicu78 | libicu77 | libicu76 | libicu74 | libicu72 | libicu71 | libicu70 | libicu67 | libicu66";
+                foreach (string d in new[] { "libx11-6", "libice6", "libsm6", "libxext6", "libxrandr2", "libxi6", "libxcursor1", "libxfixes3", "libfontconfig1" })
+                    yield return d;
+            }
+            else
+            {
+                foreach (string d in new[] { "libicu", "libX11", "libICE", "libSM", "libXext", "libXrandr", "libXi", "libXcursor", "libXfixes", "fontconfig" })
+                    yield return d;
+            }
+        }
+
+        /// <summary>Installs assets/logo.png as the hicolor "armor" icon the menu entry names.</summary>
+        private static void BundleIcon(ChannelContext context, string root)
+        {
+            string logo = Path.Combine(context.RepoRoot, "assets", "logo.png");
+            if (!File.Exists(logo))
+            {
+                Console.WriteLine("[debrpm] WARNING: assets/logo.png not found; the menu entry will use a generic icon.");
+                return;
+            }
+            string iconDir = Path.Combine(root, "usr", "share", "icons", "hicolor", "512x512", "apps");
+            Directory.CreateDirectory(iconDir);
+            File.Copy(logo, Path.Combine(iconDir, "armor.png"), overwrite: true);
+        }
+
+        // Starts the agent with each user's desktop session (GNOME, KDE, Xfce, and any other
+        // XDG-compliant desktop). A user can turn it off in their desktop's startup settings.
+        private static string AutostartEntry() =>
+            "[Desktop Entry]\n" +
+            "Type=Application\n" +
+            "Name=Armor Agent\n" +
+            "Comment=Armor backup agent (tray scheduler)\n" +
+            "Exec=/usr/bin/armor-agent\n" +
+            "Icon=armor\n" +
+            "Terminal=false\n" +
+            "X-GNOME-Autostart-enabled=true\n";
+
+        // Puts the agent in the application menu so it can be started without logging out.
+        private static string MenuEntry(ChannelContext context) =>
+            "[Desktop Entry]\n" +
+            "Type=Application\n" +
+            $"Name={context.Config.Project.DisplayName}\n" +
+            "Comment=Backup agent with a tray icon; run 'armor' in a terminal for the console\n" +
+            "Exec=/usr/bin/armor-agent\n" +
+            "Icon=armor\n" +
+            "Terminal=false\n" +
+            "Categories=Utility;Archiving;\n";
 
         private static string AfterInstall() =>
             "#!/bin/sh\nset -e\n" +
-            "chmod +x /opt/armor/Armor.Agent 2>/dev/null || true\n" +
-            "systemctl daemon-reload 2>/dev/null || true\n" +
-            "systemctl enable --now armor-agent 2>/dev/null || true\n";
+            "chmod +x /opt/armor/Armor.Agent /opt/armor/Armor.Tui 2>/dev/null || true\n" +
+            "gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true\n" +
+            "update-desktop-database -q /usr/share/applications 2>/dev/null || true\n";
 
         private static string BeforeRemove() =>
-            "#!/bin/sh\nset -e\n" +
-            "systemctl disable --now armor-agent 2>/dev/null || true\n";
+            "#!/bin/sh\n" +
+            "# Stop running agents so the files can be removed; ~/.armor is left alone.\n" +
+            "pkill -x Armor.Agent 2>/dev/null || true\n" +
+            "exit 0\n";
     }
 }

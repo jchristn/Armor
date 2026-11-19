@@ -14,9 +14,28 @@ and compresses them, encrypts every block with AES-256-GCM, and writes the resul
 to whatever target you trust the least — a USB drive, a file share, or a cloud
 bucket — in a form that only your password can reconstruct.
 
-> **Status:** version 0.4.0 — the engine and both applications are built and tested end to end. See
+> **Status:** version 0.5.0 — the engine and both applications are built and tested end to end. See
 > [`CHANGELOG.md`](CHANGELOG.md) for release notes and
 > [`archive/ARMOR_PLAN.md`](archive/ARMOR_PLAN.md) for the build plan and per-phase progress.
+
+## Download
+
+**Installers for Windows, macOS, and Linux are on the
+[Releases page](https://github.com/jchristn/Armor/releases/latest).** Pick the one for your platform:
+
+| Platform | Installer |
+|---|---|
+| Windows | `Armor-<version>-win-x64-setup.exe` (or `win-arm64`) |
+| macOS | `Armor-<version>-osx-arm64.pkg` for Apple Silicon, `osx-x64` for Intel (`.dmg` also available) |
+| Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), or `.AppImage` (any distro), for x64 and ARM64 |
+
+The installers bundle the .NET runtime, so nothing else needs to be installed first. They are **not
+code-signed yet**, so Windows SmartScreen and macOS Gatekeeper ask you to approve Armor the first time
+you open it (on Windows, **More info → Run anyway**; on macOS, **System Settings → Privacy & Security →
+Open Anyway**). [`INSTALL.md`](INSTALL.md) has the full steps for each platform, what each installer
+sets up, how to uninstall, and how to check a download against `SHA256SUMS`.
+
+To build from source instead, see [Getting started](#getting-started) below.
 
 ## Why Armor
 
@@ -92,8 +111,9 @@ library.
 
 ## Getting started
 
-For a step-by-step walkthrough — building from source, running the console and the tray
-agent, and a full backup-and-restore round trip — see
+Install Armor from the [Releases page](https://github.com/jchristn/Armor/releases/latest) (see
+[Download](#download)), or build it from source. For a step-by-step walkthrough — building from
+source, running the console and the tray agent, and a full backup-and-restore round trip — see
 [`GETTING_STARTED.md`](GETTING_STARTED.md). The short version follows.
 
 Armor keeps everything under `~/.armor`: a JSON configuration file, a SQLite database,
@@ -227,6 +247,10 @@ dotnet run --project src/Test.Integration -f net10.0 -- --type s3 \
   --endpoint http://localhost:9000 --access-key A --secret-key B \
   --bucket armor-test --region us-east-1 --path-style --no-cleanup
 ```
+
+Installers are built by `src/Armor.Publisher` and released from CI on a version tag; see
+[`BUILDING_INSTALLERS.md`](BUILDING_INSTALLERS.md) to build them locally and
+[`RELEASING_INSTALLERS.md`](RELEASING_INSTALLERS.md) for the release process.
 
 ## License
 

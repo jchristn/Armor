@@ -51,10 +51,8 @@ dotnet run --project src/Armor.Publisher -- --channel inno --rid win-x64 --outpu
 ## All three at once (CI)
 
 Push a version tag; `.github/workflows/release.yml` fans out to `windows-latest`, `macos-latest`, and
-`ubuntu-latest`, builds every installer, and attaches them to a GitHub Release.
+`ubuntu-latest`, builds every installer, and attaches them to a GitHub Release. Running the workflow
+by hand (`gh workflow run release.yml --ref main`) builds them all without releasing.
 
-```sh
-git tag v<version> && git push origin --tags
-```
-
-The tag must match `<Version>` in `src/Directory.Build.props`.
+The tag must match `<Version>` in `src/Directory.Build.props`. The full release checklist is in
+[`RELEASING_INSTALLERS.md`](RELEASING_INSTALLERS.md).

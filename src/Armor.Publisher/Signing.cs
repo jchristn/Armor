@@ -30,12 +30,19 @@ namespace Armor.Publisher
             });
         }
 
-        /// <summary>Codesigns a macOS .app bundle with a hardened runtime, if macOS signing is configured.</summary>
+        /// <summary>
+        /// Codesigns a macOS .app bundle with a hardened runtime when macOS signing is configured.
+        /// Otherwise it ad-hoc signs the bundle: copying the published executables into a bundle
+        /// leaves a signature that does not cover the bundle's resources, and Gatekeeper reports a
+        /// downloaded app like that as "damaged" with no way to open it. An ad-hoc-signed bundle gets
+        /// the normal unidentified-developer prompt, which the user can approve.
+        /// </summary>
         public static void MacCodesign(string appPath, SigningTarget s)
         {
             if (!s.IsConfigured)
             {
-                Console.WriteLine("[sign] macOs: not configured — leaving UNSIGNED (Gatekeeper will block).");
+                Console.WriteLine("[sign] macOs: not configured — ad-hoc signing only (Gatekeeper will ask the user to approve it).");
+                ProcessRunner.Run("codesign", new[] { "--deep", "--force", "--sign", "-", appPath });
                 return;
             }
             string identity = Env(s.VaultRef, "macOS signing identity");

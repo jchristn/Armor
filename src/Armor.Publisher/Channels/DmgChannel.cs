@@ -43,7 +43,8 @@ namespace Armor.Publisher.Channels
 
                 FileSystemUtil.CopyTree(payloadDir, macOsDir);
 
-                WriteInfoPlist(Path.Combine(appRoot, "Contents", "Info.plist"), context, bundleId);
+                bool hasIcon = BuildIcon(context, rid, resourcesDir);
+                WriteInfoPlist(Path.Combine(appRoot, "Contents", "Info.plist"), context, bundleId, hasIcon);
 
                 // Bundle the LaunchAgent plist so the .pkg postinstall can install it.
                 File.WriteAllText(Path.Combine(resourcesDir, bundleId + ".plist"), LaunchAgentPlist(context, bundleId));
@@ -53,8 +54,10 @@ namespace Armor.Publisher.Channels
 
                 Signing.MacCodesign(appRoot, context.Config.Signing.MacOs);
 
-                outputs.Add(BuildDmg(context, rid, appStage));
+                // The .pkg copies the bundle on its own; build it before the DMG staging gains its
+                // /Applications shortcut.
                 outputs.Add(BuildPkg(context, rid, appRoot, appName, bundleId));
+                outputs.Add(BuildDmg(context, rid, appStage));
             }
 
             return outputs;
@@ -65,6 +68,11 @@ namespace Armor.Publisher.Channels
             string dmgName = $"{context.Config.Project.Name}-{context.Version}-{rid}.dmg";
             string dmgPath = Path.Combine(context.OutputDir, dmgName);
             if (File.Exists(dmgPath)) File.Delete(dmgPath);
+
+            // A shortcut to /Applications beside the app gives the usual drag-to-install window.
+            string appsLink = Path.Combine(appStage, "Applications");
+            if (!File.Exists(appsLink) && !Directory.Exists(appsLink))
+                ProcessRunner.Run("ln", new[] { "-s", "/Applications", appsLink });
 
             Console.WriteLine($"[dmg] creating {dmgName}");
             ProcessRunner.Run("hdiutil", new[]
@@ -271,7 +279,42 @@ namespace Armor.Publisher.Channels
             return System.Convert.ToBase64String(ms.ToArray());
         }
 
-        private static void WriteInfoPlist(string path, ChannelContext context, string bundleId)
+        /// <summary>
+        /// Renders assets/logo.png into Contents/Resources/AppIcon.icns with sips and iconutil (both
+        /// ship with macOS). Returns false, and warns, when the logo is missing or the conversion fails,
+        /// so the bundle still builds with the generic app icon.
+        /// </summary>
+        private static bool BuildIcon(ChannelContext context, string rid, string resourcesDir)
+        {
+            string logo = Path.Combine(context.RepoRoot, "assets", "logo.png");
+            if (!File.Exists(logo))
+            {
+                Console.WriteLine("[dmg] WARNING: assets/logo.png not found; the app will use the generic icon.");
+                return false;
+            }
+
+            string iconset = Path.Combine(context.StagingDir, $"AppIcon-{rid}.iconset");
+            if (Directory.Exists(iconset)) Directory.Delete(iconset, true);
+            Directory.CreateDirectory(iconset);
+            try
+            {
+                foreach (int size in new[] { 16, 32, 128, 256, 512 })
+                {
+                    ProcessRunner.Run("sips", new[] { "-z", size.ToString(), size.ToString(), logo, "--out", Path.Combine(iconset, $"icon_{size}x{size}.png") });
+                    string twice = (size * 2).ToString();
+                    ProcessRunner.Run("sips", new[] { "-z", twice, twice, logo, "--out", Path.Combine(iconset, $"icon_{size}x{size}@2x.png") });
+                }
+                ProcessRunner.Run("iconutil", new[] { "--convert", "icns", iconset, "--output", Path.Combine(resourcesDir, "AppIcon.icns") });
+                return true;
+            }
+            catch (ProcessFailedException ex)
+            {
+                Console.Error.WriteLine($"[dmg] WARNING: could not build the app icon ({ex.Message}); using the generic icon.");
+                return false;
+            }
+        }
+
+        private static void WriteInfoPlist(string path, ChannelContext context, string bundleId, bool hasIcon)
         {
             string plist =
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
@@ -284,6 +327,8 @@ namespace Armor.Publisher.Channels
                 $"  <key>CFBundleShortVersionString</key><string>{context.Version}</string>\n" +
                 $"  <key>CFBundleExecutable</key><string>{context.ExeName}</string>\n" +
                 "  <key>CFBundlePackageType</key><string>APPL</string>\n" +
+                (hasIcon ? "  <key>CFBundleIconFile</key><string>AppIcon</string>\n" : "") +
+                "  <key>NSHighResolutionCapable</key><true/>\n" +
                 "  <key>LSMinimumSystemVersion</key><string>11.0</string>\n" +
                 "  <key>LSUIElement</key><true/>\n" +
                 "</dict>\n</plist>\n";
@@ -300,7 +345,8 @@ namespace Armor.Publisher.Channels
                 $"  <key>Label</key><string>{bundleId}</string>\n" +
                 $"  <key>ProgramArguments</key><array><string>{exe}</string></array>\n" +
                 "  <key>RunAtLoad</key><true/>\n" +
-                "  <key>KeepAlive</key><true/>\n" +
+                // Restart the agent if it crashes, but not after the user quits it from the menu bar.
+                "  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n" +
                 "</dict>\n</plist>\n";
         }
 
@@ -312,9 +358,14 @@ namespace Armor.Publisher.Channels
                 "set -e\n" +
                 $"cp \"{plistSrc}\" /Library/LaunchAgents/{bundleId}.plist\n" +
                 "chmod 644 /Library/LaunchAgents/" + bundleId + ".plist\n" +
-                "# Load for the console user so it starts now as well as at future logins.\n" +
-                "uid=$(/usr/bin/id -u \"${USER:-$(/usr/bin/stat -f%Su /dev/console)}\")\n" +
-                $"/bin/launchctl bootstrap gui/$uid /Library/LaunchAgents/{bundleId}.plist 2>/dev/null || true\n" +
+                "# Load for the logged-in (console) user so it starts now as well as at future logins.\n" +
+                "# The installer runs this script as root, so $USER is not that user.\n" +
+                "console_user=$(/usr/bin/stat -f%Su /dev/console)\n" +
+                "if [ -n \"$console_user\" ] && [ \"$console_user\" != root ]; then\n" +
+                "  uid=$(/usr/bin/id -u \"$console_user\")\n" +
+                $"  /bin/launchctl bootout gui/$uid/{bundleId} 2>/dev/null || true\n" +
+                $"  /bin/launchctl bootstrap gui/$uid /Library/LaunchAgents/{bundleId}.plist 2>/dev/null || true\n" +
+                "fi\n" +
                 CliSymlinks(context, appName) +
                 "exit 0\n";
         }
