@@ -6,6 +6,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Clearer steps past macOS's "Armor Not Opened" prompt.** The release notes now open with the exact
+  dialog text and how to get past it (and the same for Windows SmartScreen), and the unsigned `.dmg`
+  includes an *If Armor won't open.txt* note beside the app.
+
 ## [0.5.0] - 2026-11-19
 
 First release with downloadable installers on

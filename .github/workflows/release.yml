@@ -143,7 +143,8 @@ jobs:
             echo "::error::CHANGELOG.md has no '## [$VERSION]' section. Add one before tagging."
             exit 1
           fi
-          { cat notes.md; echo; sed "s/{version}/$VERSION/g" .github/release-install-notes.md; } > release-notes.md
+          # Install steps first: the unsigned-build bypass is what a downloader needs before anything else.
+          { sed "s/{version}/$VERSION/g" .github/release-install-notes.md; echo; echo "## What's changed"; echo; cat notes.md; } > release-notes.md
       - uses: actions/download-artifact@v4
         with: { path: dl, pattern: installers-* }
       - name: Stage assets and compute SHA256SUMS

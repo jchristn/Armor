@@ -30,10 +30,16 @@ bucket — in a form that only your password can reconstruct.
 | Linux | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/RHEL), or `.AppImage` (any distro), for x64 and ARM64 |
 
 The installers bundle the .NET runtime, so nothing else needs to be installed first. They are **not
-code-signed yet**, so Windows SmartScreen and macOS Gatekeeper ask you to approve Armor the first time
-you open it (on Windows, **More info → Run anyway**; on macOS, **System Settings → Privacy & Security →
-Open Anyway**). [`INSTALL.md`](INSTALL.md) has the full steps for each platform, what each installer
-sets up, how to uninstall, and how to check a download against `SHA256SUMS`.
+code-signed yet**, so Windows and macOS block the first launch:
+
+- **macOS** says *"“Armor” Not Opened. Apple could not verify “Armor” is free of malware…"*. Click
+  **Done** (not Move to Trash), then open **System Settings → Privacy & Security**, scroll down, and
+  click **Open Anyway** next to the Armor message. Or run `xattr -dr com.apple.quarantine` on the
+  downloaded `.pkg`, or on `/Applications/Armor.app` after copying it from the `.dmg`.
+- **Windows** says *"Windows protected your PC"*. Click **More info → Run anyway**.
+
+[`INSTALL.md`](INSTALL.md) has the full steps for each platform, what each installer sets up, how to
+uninstall, and how to check a download against `SHA256SUMS`.
 
 To build from source instead, see [Getting started](#getting-started) below.
 

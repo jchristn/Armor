@@ -74,6 +74,10 @@ namespace Armor.Publisher.Channels
             if (!File.Exists(appsLink) && !Directory.Exists(appsLink))
                 ProcessRunner.Run("ln", new[] { "-s", "/Applications", appsLink });
 
+            // Unsigned builds are blocked on first open; put the way past it where the user is looking.
+            if (!context.Config.Signing.MacOs.IsConfigured)
+                File.WriteAllText(Path.Combine(appStage, "If Armor won't open.txt"), GatekeeperNote(context));
+
             Console.WriteLine($"[dmg] creating {dmgName}");
             ProcessRunner.Run("hdiutil", new[]
             {
@@ -146,6 +150,32 @@ namespace Armor.Publisher.Channels
             Signing.MacNotarizeStaple(pkgPath, context.Config.Signing.MacOs);
             context.EmitChecksum(pkgPath);
             return pkgPath;
+        }
+
+        /// <summary>
+        /// Text shown beside the app in an unsigned .dmg: how to get past Gatekeeper's
+        /// "Not Opened" prompt.
+        /// </summary>
+        private static string GatekeeperNote(ChannelContext context)
+        {
+            string name = context.Config.Project.DisplayName;
+            return
+                $"IF MACOS SAYS \"{name}\" NOT OPENED\n\n" +
+                $"This build of {name} is not signed with an Apple Developer ID, so the first time you open it\n" +
+                "macOS says:\n\n" +
+                $"    \"{name}\" Not Opened\n" +
+                $"    Apple could not verify \"{name}\" is free of malware that may harm your Mac or\n" +
+                "    compromise your privacy.\n\n" +
+                "To open it anyway:\n\n" +
+                $"  1. Drag {name}.app to the Applications folder in this window, then open it there.\n" +
+                "  2. When the message appears, click Done (not Move to Trash).\n" +
+                "  3. Open System Settings > Privacy & Security and scroll down to Security.\n" +
+                $"  4. Next to \"{name}\" was blocked to protect your Mac, click Open Anyway.\n" +
+                "     (The button only appears for about an hour after step 2.)\n" +
+                "  5. Click Open Anyway again and enter your password. You only do this once.\n\n" +
+                "Or, after step 1, run this in Terminal and open it normally:\n\n" +
+                $"    xattr -dr com.apple.quarantine /Applications/{name}.app\n\n" +
+                $"More: {context.Config.Project.Repo}/blob/main/INSTALL.md\n";
         }
 
         /// <summary>

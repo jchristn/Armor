@@ -26,9 +26,11 @@ Each installer contains the agent (`Armor.Agent`) and the console (`Armor.Tui`),
 self-contained and single-file for `net10.0`, so users don't need .NET. What each installer does on
 the user's machine is described in [`INSTALL.md`](INSTALL.md).
 
-The release notes are the version's section of [`CHANGELOG.md`](CHANGELOG.md), followed by
-[`.github/release-install-notes.md`](.github/release-install-notes.md) (the download table and the
-unsigned-build steps, with `{version}` filled in).
+The release notes start with [`.github/release-install-notes.md`](.github/release-install-notes.md)
+(the steps past the unsigned-build prompts and the download table, with `{version}` filled in),
+followed by the version's section of [`CHANGELOG.md`](CHANGELOG.md) under **What's changed**. The
+install steps come first because the macOS *"“Armor” Not Opened"* prompt is the first thing a new user
+hits.
 
 ## The builds are unsigned
 
@@ -38,8 +40,10 @@ first time they run Armor and have to approve it:
 - **Windows:** SmartScreen shows *"Windows protected your PC"* → **More info → Run anyway**.
 - **macOS:** the app is ad-hoc signed (the Publisher does this when Apple signing isn't configured),
   so Gatekeeper treats it as coming from an unidentified developer: the user clicks **Open Anyway** in
-  **System Settings → Privacy & Security**. Without the ad-hoc signature, macOS would call the download
-  "damaged" and refuse to open it, so keep the ad-hoc step in place.
+  **System Settings → Privacy & Security** (after clicking **Done** on *"“Armor” Not Opened"*). An
+  unsigned `.dmg` also carries an *If Armor won't open.txt* note with those steps. Without the ad-hoc
+  signature, macOS would call the download "damaged" and refuse to open it, so keep the ad-hoc step in
+  place.
 - **Linux:** packages install without prompting.
 
 These steps are in the release notes, `INSTALL.md`, and the README. To turn on signing later, see

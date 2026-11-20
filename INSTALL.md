@@ -47,18 +47,39 @@ Intel Macs. Two formats are offered:
 - **`.dmg`:** drag `Armor.app` to Applications. Nothing starts at login and there is no `armor` command;
   open the app to start the menu-bar agent and open the console from its menu.
 
-**Unsigned-build warning:** macOS blocks the first open with *"Apple could not verify…"* (or
-*"…cannot be opened because it is from an unidentified developer"*). To allow it:
+### "Armor" Not Opened
 
-1. Try to open the `.pkg` (or, from the `.dmg`, `Armor.app` after copying it to Applications) and
-   click **Done** / **OK** on the warning.
-2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** next
-   to the message about Armor. Confirm with your password.
+Because the build is not signed by an Apple Developer ID, the first open is blocked with:
 
-Or clear the download's quarantine flag in Terminal first, and macOS opens it without asking:
+> **“Armor” Not Opened**
+> Apple could not verify “Armor” is free of malware that may harm your Mac or compromise your privacy.
+> [Move to Trash] [Done]
+
+(Older macOS versions say *"“Armor” cannot be opened because it is from an unidentified developer"*.)
+The same prompt appears for the `.pkg` itself, named after the file. To open it anyway:
+
+1. Click **Done**. Do not click **Move to Trash**.
+2. Open **System Settings → Privacy & Security** and scroll down to **Security**.
+3. Next to *"“Armor” was blocked to protect your Mac"*, click **Open Anyway**. The button only appears
+   for about an hour after the blocked attempt; if it isn't there, try to open Armor again, then come
+   back.
+4. Click **Open Anyway** in the dialog that follows and enter your password. macOS remembers this, so
+   you only do it once.
+
+On macOS 15 (Sequoia) and later, Control-click → **Open** no longer gets past this prompt; use the
+steps above.
+
+**Or skip the prompt from Terminal** by removing the quarantine flag macOS puts on downloads. For the
+`.pkg`, run this before opening it:
 
 ```bash
 xattr -dr com.apple.quarantine ~/Downloads/Armor-<version>-osx-arm64.pkg
+```
+
+For the `.dmg`, drag `Armor.app` to Applications first, then run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Armor.app
 ```
 
 You can also install the `.pkg` from Terminal, which skips the prompt:
